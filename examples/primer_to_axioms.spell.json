@@ -1,0 +1,73 @@
+{
+  "spell": "primer_to_axioms",
+  "intent": "Read local primers, synthesize recurring themes, and publish a relay-start artifact.",
+  "inputs": {
+    "sources": [
+      "primers/primer1.txt",
+      "primers/primer2.txt",
+      "primers/primer3.txt",
+      "primers/primer4.txt",
+      "primers/primer5.txt",
+      "primers/primer6.txt",
+      "primers/primer7.txt"
+    ]
+  },
+  "constraints": {
+    "risk": "medium",
+    "required_capabilities": ["read", "transform", "verify", "write"],
+    "policy": "../policies/default.policy.json",
+    "requires_approval_for": ["write"]
+  },
+  "graph": [
+    {
+      "id": "gather",
+      "rune": "mirror.read",
+      "effect": "read",
+      "args": {
+        "input": "$inputs.sources"
+      }
+    },
+    {
+      "id": "brief",
+      "rune": "forge.summarize",
+      "effect": "transform",
+      "args": {
+        "from": "$gather"
+      }
+    },
+    {
+      "id": "review",
+      "rune": "seal.review",
+      "effect": "verify",
+      "args": {
+        "from": "$brief",
+        "must_include": ["Recurring themes", "Source 1", "Source 7"]
+      }
+    },
+    {
+      "id": "publish",
+      "rune": "gate.file_write",
+      "effect": "write",
+      "args": {
+        "from": "$brief",
+        "path": "../artifacts/primer_to_axioms.md",
+        "mode": "text"
+      },
+      "compensate": {
+        "rune": "gate.file_delete",
+        "effect": "write",
+        "args": {
+          "path": "../artifacts/primer_to_axioms.md"
+        }
+      },
+      "depends_on": ["review"]
+    }
+  ],
+  "witness": {
+    "record": true,
+    "format": "prov-json",
+    "path": "../artifacts/primer_to_axioms.prov.json",
+    "trace_path": "../artifacts/primer_to_axioms.trace.json",
+    "scxml_path": "../artifacts/primer_to_axioms.scxml"
+  }
+}

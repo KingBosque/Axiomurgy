@@ -1,53 +1,69 @@
-# Axiomurgy v0.1
+# Axiomurgy v0.2
 
-Axiomurgy is a programmable "magic system" for AIs.
+Axiomurgy is a programmable magical system for AIs.
 
-It treats every spell as a **typed, permissioned, provenance-bearing workflow**.
-Instead of mana, it consumes budget, authority, uncertainty tolerance, and time.
-Instead of wands, it uses schemas, tools, memory, policies, and sandboxes.
+A spell is not a vibe. It is a **typed, permissioned, provenance-bearing workflow**.
+Instead of mana, it spends scope, authority, exposure, latency, and uncertainty.
+Instead of wands, it uses schemas, protocols, tools, policies, and witnesses.
 
-## Core idea
+## What v0.2 adds
 
-A spell succeeds only when these five things align:
+Compared with the earlier kickoff draft, v0.2 adds real runtime machinery:
 
-1. **Name** — the target is represented in a machine-usable way.
-2. **Intent** — the desired transformation is explicit.
-3. **Authority** — the caster has the capability to do it.
-4. **Witness** — the system can explain and trace what happened.
-5. **Vessel** — execution happens in a bounded runtime.
+- Draft 2020-12 JSON Schema validation for spells
+- dependency-aware execution planning (`requires` / `depends_on`)
+- policy evaluation and human approval gates (`--approve step_id` / `--approve all`)
+- rollback / compensation semantics for side effects (`step.compensate`)
+- provenance export and raw execution traces
+- SCXML plan export
+- MCP stdio integration for resources and tools
+- OpenAPI-driven HTTP calls (local mock server)
 
-## Project files
+## Project structure
 
-- `AXIOMURGY_SPEC.md` — worldbuilding and systems design document.
-- `spell.schema.json` — a JSON Schema for spells.
-- `requirements.txt` — Python dependency (`jsonschema` for Draft 2020-12 validation).
-- `axiomurgy.py` — a small reference runtime.
-- `examples/research_brief.spell.json` — example spell.
-- `examples/inbox_triage.spell.json` — example spell.
+- `AXIOMURGY_SPEC.md` — design spec and metaphysics
+- `spell.schema.json` — spell contract
+- `axiomurgy.py` — runtime
+- `requirements.txt` — Python dependencies
+- `policies/default.policy.json` — reference approval policy
+- `adapters/demo_mcp_server.py` — local MCP resource/tool server
+- `adapters/mock_issue_server.py` — local HTTP server for OpenAPI demos
+- `adapters/mock_issue_api.openapi.yaml` — OpenAPI surface for the issue server
+- `examples/primer_to_axioms.spell.json` — reads local `primers/` and writes an artifact (with compensation)
+- `examples/primer_via_mcp.spell.json` — reads primers via MCP, stages output via an MCP tool (with compensation)
+- `examples/openapi_ticket_then_fail.spell.json` — creates a ticket then intentionally fails to prove rollback
+- `artifacts/` — generated outputs, traces, provenance, and SCXML plans (gitignored)
+- `axiomurgy_workspace/` — MCP demo workspace notes (gitignored)
 
-## Quick start
+## Quick start (Windows PowerShell)
+
+Install dependencies:
 
 ```bash
 pip install -r requirements.txt
-python axiomurgy.py examples/research_brief.spell.json
-python axiomurgy.py examples/inbox_triage.spell.json
 ```
 
-The reference runtime is intentionally minimal. It demonstrates:
+Run the direct-file primer relay:
 
-- spell parsing
-- contract validation
-- capability checks
-- step execution
-- provenance logging
-- reversible / approval-aware design hooks
+```bash
+python axiomurgy.py examples/primer_to_axioms.spell.json --approve publish
+```
 
-## Status
+Run the MCP version:
 
-This is a kickoff artifact, not a finished platform.
-The next implementation steps are:
+```bash
+python axiomurgy.py examples/primer_via_mcp.spell.json --approve publish
+```
 
-- compile spells to a workflow/state machine
-- add tool adapters for real systems
-- add policy engines, quorum approval, and rollback actions
-- add provenance export formats
+Run the OpenAPI rollback demo:
+
+```bash
+# in one terminal
+python adapters/mock_issue_server.py
+
+# in another terminal
+python axiomurgy.py examples/openapi_ticket_then_fail.spell.json --approve create_ticket
+```
+
+The last command is expected to **fail on purpose** after the external write.
+The runtime should then issue the compensation action and delete the created ticket.

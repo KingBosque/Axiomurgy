@@ -1,0 +1,71 @@
+{
+  "spell": "primer_via_mcp",
+  "intent": "Read local primers through MCP resources, synthesize them, and stage a workspace note via an MCP tool.",
+  "inputs": {
+    "server": "../adapters/demo_mcp_server.py",
+    "resource_uris": [
+      "upload://primer/1",
+      "upload://primer/2",
+      "upload://primer/3",
+      "upload://primer/4",
+      "upload://primer/5",
+      "upload://primer/6",
+      "upload://primer/7"
+    ]
+  },
+  "constraints": {
+    "risk": "medium",
+    "required_capabilities": ["read", "transform", "write"],
+    "policy": "../policies/default.policy.json"
+  },
+  "graph": [
+    {
+      "id": "read_uploads",
+      "rune": "mirror.mcp_resource",
+      "effect": "read",
+      "args": {
+        "server": "$inputs.server",
+        "uri": "$inputs.resource_uris"
+      }
+    },
+    {
+      "id": "brief",
+      "rune": "forge.summarize",
+      "effect": "transform",
+      "args": {
+        "from": "$read_uploads"
+      }
+    },
+    {
+      "id": "publish",
+      "rune": "gate.mcp_call_tool",
+      "effect": "write",
+      "args": {
+        "server": "$inputs.server",
+        "name": "stage_note",
+        "arguments": {
+          "path": "relay/primer_via_mcp.md",
+          "content": "$brief"
+        }
+      },
+      "compensate": {
+        "rune": "gate.mcp_call_tool",
+        "effect": "write",
+        "args": {
+          "server": "$inputs.server",
+          "name": "delete_note",
+          "arguments": {
+            "path": "relay/primer_via_mcp.md"
+          }
+        }
+      }
+    }
+  ],
+  "witness": {
+    "record": true,
+    "format": "prov-json",
+    "path": "../artifacts/primer_via_mcp.prov.json",
+    "trace_path": "../artifacts/primer_via_mcp.trace.json",
+    "scxml_path": "../artifacts/primer_via_mcp.scxml"
+  }
+}

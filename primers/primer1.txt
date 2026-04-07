@@ -1,0 +1,3 @@
+Axiomurgy primer 1
+
+Tools are ritual instruments; each operation must be named and scoped.

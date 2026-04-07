@@ -1,0 +1,3 @@
+Primer 4
+
+Irreversible actions should require explicit approval and rollback hooks.

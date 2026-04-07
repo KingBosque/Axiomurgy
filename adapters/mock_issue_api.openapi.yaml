@@ -1,0 +1,65 @@
+openapi: 3.1.0
+info:
+  title: Axiomurgy Mock Issue API
+  version: 0.2.0
+servers:
+  - url: http://127.0.0.1:8942
+paths:
+  /tickets:
+    post:
+      operationId: createTicket
+      summary: Create a ticket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, description]
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                labels:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "201":
+          description: Ticket created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, title, description, labels]
+                properties:
+                  id:
+                    type: string
+                  title:
+                    type: string
+                  description:
+                    type: string
+                  labels:
+                    type: array
+                    items:
+                      type: string
+  /tickets/{ticketId}:
+    parameters:
+      - name: ticketId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getTicket
+      summary: Get a ticket
+      responses:
+        "200":
+          description: Ticket fetched
+    delete:
+      operationId: deleteTicket
+      summary: Delete a ticket
+      responses:
+        "200":
+          description: Ticket deleted
