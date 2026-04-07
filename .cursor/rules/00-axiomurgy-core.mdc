@@ -3,7 +3,7 @@ description: Core Axiomurgy invariants and workflow
 alwaysApply: true
 ---
 
-- Preserve Axiomurgy's core model: spells are explicit graphs executed under capability, policy, approval, and witness constraints.
+- Preserve Axiomurgy's core model: spells are explicit graphs executed under capability, policy, approval, witness, and proof constraints.
 - Keep side effects reviewable. Do not bypass approval or rollback semantics for convenience.
 - Prefer incremental patches over rewrites.
 - Before finishing, run `python -m pytest -q`.

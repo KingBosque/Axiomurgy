@@ -1,94 +1,87 @@
-# Axiomurgy v0.5 target
+# Axiomurgy v0.6 target
 
 ## Working title
 
-**Spellbooks and proof-carrying witnesses**
+**Plan mode, linting, and approval manifests**
 
 ## Why this should be next
 
-Axiomurgy already has the bones of a programmable magic runtime:
-- graph execution
-- policy and approvals
-- rollback
-- witnesses
-- adapters
+Axiomurgy now has:
+- direct spells
+- packaged spellbooks
+- deterministic validators
+- proof-carrying witnesses
 
-What it does not yet have is a strong packaging story or a strong proof story.
-Right now a spell can run and emit witnesses, but the runtime does not clearly distinguish between:
-- a spell artifact
-- a reusable spell collection
-- a validated claim about output quality
+What it still lacks is a strong **preflight story**.
+Right now a spell can run and produce good witnesses after the fact, but the runtime still makes it too hard to answer simple questions *before* execution:
+- what entrypoints does this spellbook expose?
+- what writes are about to happen?
+- which steps require approval?
+- are there packaging or dependency problems before I run anything?
 
-That is the gap for v0.5.
+That is the gap for v0.6.
 
 ## Scope
 
-### 1. Spellbook package format
+### 1. Plan mode
 
-Introduce a spellbook directory format with a manifest.
+Add a runtime mode that resolves a spell or spellbook and prints a deterministic execution summary without running side effects.
 
-Suggested layout:
+Suggested CLI forms:
 
 ```text
-spellbooks/
-  primer_codex/
-    spellbook.json
-    spells/
-      publish_codex.spell.json
-    schemas/
-    docs/
-    tests/
+python axiomurgy.py spellbooks/primer_codex --describe
+python axiomurgy.py spellbooks/primer_codex --entrypoint publish_codex --plan
 ```
 
-Suggested manifest fields:
-- `name`
-- `version`
-- `description`
-- `entrypoints`
-- `required_capabilities`
-- `default_policy`
-- `validators`
-- `artifacts_dir`
+Plan output should include:
+- spell name
+- spellbook name and entrypoint when relevant
+- ordered steps
+- step effects and runes
+- referenced dependencies
+- planned writes
+- steps that require approval under the active policy
 
-Runtime should accept either:
-- a direct spell path, or
-- a spellbook path plus entrypoint name
+### 2. Deterministic linting
 
-### 2. Validator runes
+Add a lint mode for spells and spellbooks.
 
-Add stronger, explicit validation steps instead of relying only on `seal.review` marker checks.
+Candidate checks:
+- unknown rune names
+- missing dependency references
+- duplicate step ids
+- output schema path not found
+- spellbook entrypoint path not found
+- spellbook default policy path not found
+- dangerous write steps without any approval requirement in spell constraints or policy
 
-Candidate runes:
-- `seal.assert_jsonschema`
-- `seal.assert_markers`
-- `seal.assert_contains_sections`
-- `seal.assert_path_exists`
+Keep the linter deterministic and local.
+Do not add arbitrary code execution.
 
-Keep them deterministic and safe.
-Do not add general arbitrary Python execution as a validator.
+### 3. Approval manifest
 
-### 3. Proof-carrying witnesses
+Add a machine-readable preflight file that summarizes approvals and risky effects.
 
-Extend witness output so successful runs can surface a compact `proofs` block.
+Suggested shape:
+- `required_approvals`
+- `write_steps`
+- `external_calls`
+- `policy_path`
+- `artifact_dir`
+- `simulate_recommendation`
 
-Suggested proof record shape:
-- `validator`
-- `target`
-- `status`
-- `message`
-- `evidence`
-- `timestamp`
+The idea is that another agent or IDE can inspect the manifest before deciding whether to proceed.
 
-The final runtime result should include a summary of passed and failed proofs.
+### 4. One plan-aware packaged example
 
-### 4. One packaged example
+Extend `spellbooks/primer_codex/` so it can be:
+- described
+- linted
+- planned
+- executed
 
-Create one end-to-end packaged spellbook based on the primer relay.
-That spellbook should:
-- ingest the local primer transcripts
-- publish a codex artifact
-- run at least two validators
-- emit witnesses with proof summaries
+Acceptance should demonstrate that the same packaged example works across all four modes.
 
 ## Acceptance criteria
 
@@ -96,23 +89,23 @@ A change is successful when all of the following are true:
 
 1. `python -m pytest -q` passes.
 2. `bash scripts/smoke.sh` passes.
-3. The runtime can execute one packaged spellbook entrypoint.
-4. The final result JSON includes a `proofs` summary.
-5. The primer spellbook emits at least one artifact, one trace, one PROV-like JSON file, and one SCXML file.
+3. The runtime can describe and plan at least one packaged spellbook entrypoint.
+4. The linter reports success on the packaged primer spellbook.
+5. The plan output or manifest clearly lists required approvals and planned writes.
 
 ## Non-goals
 
 Not for this lap:
 - real sandboxing for untrusted code
-- arbitrary user-defined validator code execution
-- production-grade auth or secret management
-- distributed scheduling
+- distributed execution
+- production auth or secret management
+- arbitrary user-defined lint plugins
 
 ## Guardrails
 
 Keep these constraints in place:
 - risky writes still require approval
 - rollback stays first-class
-- witnesses remain on by default
-- adapter demos stay clearly marked as demos
+- proofs remain on by default when witness recording is enabled
+- adapters stay clearly marked as demos
 - keep the code understandable for a follow-on agent
