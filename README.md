@@ -1,39 +1,29 @@
-# Axiomurgy v0.2
+# Axiomurgy v0.3
 
 Axiomurgy is a programmable magical system for AIs.
 
-A spell is not a vibe. It is a **typed, permissioned, provenance-bearing workflow**.
-Instead of mana, it spends scope, authority, exposure, latency, and uncertainty.
-Instead of wands, it uses schemas, protocols, tools, policies, and witnesses.
+This pass makes the project concrete rather than merely descriptive:
 
-## What v0.2 adds
+- JSON Schema spell validation
+- dependency-aware execution planning
+- policy checks and human approval gates
+- rollback and compensation semantics
+- PROV-like witness export and SCXML plan export
+- MCP stdio resource and tool integration
+- OpenAPI-driven HTTP calls
+- lightweight confidence and entropy tracking
 
-Compared with the earlier kickoff draft, v0.2 adds real runtime machinery:
+## Project layout
 
-- Draft 2020-12 JSON Schema validation for spells
-- dependency-aware execution planning (`requires` / `depends_on`)
-- policy evaluation and human approval gates (`--approve step_id` / `--approve all`)
-- rollback / compensation semantics for side effects (`step.compensate`)
-- provenance export and raw execution traces
-- SCXML plan export
-- MCP stdio integration for resources and tools
-- OpenAPI-driven HTTP calls (local mock server)
-
-## Project structure
-
-- `AXIOMURGY_SPEC.md` — design spec and metaphysics
-- `spell.schema.json` — spell contract
-- `axiomurgy.py` — runtime
-- `requirements.txt` — Python dependencies
-- `policies/default.policy.json` — reference approval policy
-- `adapters/demo_mcp_server.py` — local MCP resource/tool server
-- `adapters/mock_issue_server.py` — local HTTP server for OpenAPI demos
-- `adapters/mock_issue_api.openapi.yaml` — OpenAPI surface for the issue server
-- `examples/primer_to_axioms.spell.json` — reads local `primers/` and writes an artifact (with compensation)
-- `examples/primer_via_mcp.spell.json` — reads primers via MCP, stages output via an MCP tool (with compensation)
-- `examples/openapi_ticket_then_fail.spell.json` — creates a ticket then intentionally fails to prove rollback
-- `artifacts/` — generated outputs, traces, provenance, and SCXML plans (gitignored)
-- `axiomurgy_workspace/` — MCP demo workspace notes (gitignored)
+- [`axiomurgy.py`](axiomurgy.py) — runtime (CLI)
+- [`spell.schema.json`](spell.schema.json) — spell contract
+- [`requirements.txt`](requirements.txt) — Python dependencies
+- [`policies/default.policy.json`](policies/default.policy.json) — reference policy
+- [`adapters/`](adapters/) — MCP demo server and OpenAPI mock issue server
+- [`examples/`](examples/) — v0.3 demos; [`examples/research_brief.spell.json`](examples/research_brief.spell.json) and [`examples/inbox_triage.spell.json`](examples/inbox_triage.spell.json) are smaller smoke examples compatible with this schema
+- [`primers/`](primers/) — local text inputs for primer relays
+- [`artifacts/`](artifacts/) — generated traces, PROV JSON, SCXML (gitignored)
+- [`RELAY_NOTES.md`](RELAY_NOTES.md) — relay changelog and verification notes
 
 ## Quick start (Windows PowerShell)
 
@@ -43,27 +33,41 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-Run the direct-file primer relay:
+Run the direct-file primer relay (approves the write step `publish`):
 
 ```bash
 python axiomurgy.py examples/primer_to_axioms.spell.json --approve publish
 ```
 
-Run the MCP version:
+Run the MCP relay (approves the write step `stage`):
 
 ```bash
-python axiomurgy.py examples/primer_via_mcp.spell.json --approve publish
+python axiomurgy.py examples/primer_via_mcp.spell.json --approve stage
 ```
 
 Run the OpenAPI rollback demo:
 
 ```bash
-# in one terminal
+# Terminal A: start the mock issue API
 python adapters/mock_issue_server.py
 
-# in another terminal
+# Terminal B: expect failure after the write, then compensation deletes the ticket
 python axiomurgy.py examples/openapi_ticket_then_fail.spell.json --approve create_ticket
 ```
 
-The last command is expected to **fail on purpose** after the external write.
-The runtime should then issue the compensation action and delete the created ticket.
+That final command is expected to **fail intentionally** after the write and then **compensate** (delete) the created ticket.
+
+Optional flags:
+
+- `--policy path\to\policy.json` (defaults to `policies/default.policy.json`)
+- `--artifact-dir path\to\artifacts` (defaults to `artifacts`)
+- `--simulate` to suppress real external writes where supported
+
+## Smaller examples
+
+Policy may require explicit approvals for writes at medium risk or above. For a quick run:
+
+```bash
+python axiomurgy.py examples/research_brief.spell.json --approve stage
+python axiomurgy.py examples/inbox_triage.spell.json --approve approval --approve archive
+```

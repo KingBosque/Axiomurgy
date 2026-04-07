@@ -26,7 +26,7 @@ paths:
                   items:
                     type: string
       responses:
-        "201":
+        '201':
           description: Ticket created
           content:
             application/json:
@@ -55,11 +55,11 @@ paths:
       operationId: getTicket
       summary: Get a ticket
       responses:
-        "200":
+        '200':
           description: Ticket fetched
     delete:
       operationId: deleteTicket
       summary: Delete a ticket
       responses:
-        "200":
+        '200':
           description: Ticket deleted

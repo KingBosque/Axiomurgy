@@ -5,132 +5,57 @@
   "type": "object",
   "required": ["spell", "intent", "graph"],
   "properties": {
-    "spell": {
-      "type": "string",
-      "minLength": 1
-    },
-    "intent": {
-      "type": "string",
-      "minLength": 1
-    },
-    "inputs": {
-      "type": "object",
-      "additionalProperties": true,
-      "default": {}
-    },
+    "spell": {"type": "string", "minLength": 1},
+    "intent": {"type": "string", "minLength": 1},
+    "inputs": {"type": "object", "additionalProperties": true, "default": {}},
     "constraints": {
       "type": "object",
       "properties": {
         "max_tokens": {"type": "integer", "minimum": 1},
         "max_latency_s": {"type": "number", "minimum": 0},
-        "risk": {"type": "string", "enum": ["low", "medium", "high", "critical"], "default": "medium"},
-        "required_capabilities": {
-          "type": "array",
-          "items": {"type": "string"},
-          "uniqueItems": true,
-          "default": []
-        },
-        "requires_approval_for": {
-          "type": "array",
-          "items": {"type": "string"},
-          "uniqueItems": true,
-          "default": []
-        },
-        "policy": {"type": "string"},
-        "simulate_only": {"type": "boolean", "default": false},
-        "allow_remote_http": {"type": "boolean", "default": false}
+        "risk": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
+        "required_capabilities": {"type": "array", "items": {"type": "string"}, "uniqueItems": true, "default": []},
+        "requires_approval_for": {"type": "array", "items": {"type": "string"}, "uniqueItems": true, "default": []}
       },
       "additionalProperties": true,
       "default": {}
     },
-    "graph": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "$ref": "#/$defs/step"
-      }
-    },
+    "graph": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/step"}},
+    "rollback": {"type": "array", "items": {"$ref": "#/$defs/rollbackStep"}, "default": []},
     "witness": {
       "type": "object",
       "properties": {
         "record": {"type": "boolean", "default": true},
-        "format": {"type": "string", "enum": ["prov-json", "prov-like", "trace"], "default": "prov-json"},
-        "path": {"type": "string"},
-        "trace_path": {"type": "string"},
-        "scxml_path": {"type": "string"},
-        "include_inputs": {"type": "boolean", "default": true}
+        "format": {"type": "string", "default": "prov-like"},
+        "output_dir": {"type": "string"}
       },
       "additionalProperties": true,
-      "default": {"record": true, "format": "prov-json"}
+      "default": {"record": true, "format": "prov-like"}
     }
   },
   "additionalProperties": false,
   "$defs": {
-    "compensation": {
-      "type": "object",
-      "required": ["rune"],
-      "properties": {
-        "rune": {
-          "type": "string",
-          "pattern": "^[a-z]+\\.[a-z_]+$"
-        },
-        "args": {
-          "type": "object",
-          "additionalProperties": true,
-          "default": {}
-        },
-        "effect": {
-          "type": "string",
-          "enum": ["read", "memory", "reason", "transform", "verify", "write", "approve", "simulate"],
-          "default": "write"
-        }
-      },
-      "additionalProperties": false
-    },
     "step": {
       "type": "object",
       "required": ["id", "rune"],
       "properties": {
-        "id": {
-          "type": "string",
-          "pattern": "^[A-Za-z_][A-Za-z0-9_\\-]*$"
-        },
-        "rune": {
-          "type": "string",
-          "pattern": "^[a-z]+\\.[a-z_]+$"
-        },
-        "args": {
-          "type": "object",
-          "additionalProperties": true,
-          "default": {}
-        },
-        "requires": {
-          "type": "array",
-          "items": {"type": "string"},
-          "uniqueItems": true,
-          "default": []
-        },
-        "depends_on": {
-          "type": "array",
-          "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_\\-]*$"},
-          "uniqueItems": true,
-          "default": []
-        },
-        "effect": {
-          "type": "string",
-          "enum": ["read", "memory", "reason", "transform", "verify", "write", "approve", "simulate"],
-          "default": "transform"
-        },
-        "on_failure": {
-          "type": "string",
-          "enum": ["rollback", "halt", "continue"],
-          "default": "rollback"
-        },
-        "compensate": {
-          "$ref": "#/$defs/compensation"
-        }
+        "id": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_\\-]*$"},
+        "rune": {"type": "string", "pattern": "^[a-z]+\\.[a-z_]+$"},
+        "args": {"type": "object", "additionalProperties": true, "default": {}},
+        "requires": {"type": "array", "items": {"type": "string"}, "uniqueItems": true, "default": []},
+        "effect": {"type": "string", "enum": ["read", "transform", "verify", "write", "approve", "simulate"], "default": "transform"},
+        "output_schema": {"oneOf": [{"type": "string"}, {"type": "object"}]},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "description": {"type": "string"},
+        "compensates": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_\\-]*$"}
       },
       "additionalProperties": false
+    },
+    "rollbackStep": {
+      "allOf": [
+        {"$ref": "#/$defs/step"},
+        {"type": "object", "required": ["compensates"]}
+      ]
     }
   }
 }

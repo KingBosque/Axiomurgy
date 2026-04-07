@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any, Dict
 
 PORT = int(os.environ.get("AXIOMURGY_ISSUE_PORT", "8942"))
-DB_PATH = Path(os.environ.get("AXIOMURGY_ISSUE_DB", "axiomurgy_mock_issues.json"))
+_DB_DEFAULT = Path(__file__).resolve().parents[1] / "axiomurgy_mock_issues.json"
+DB_PATH = Path(os.environ.get("AXIOMURGY_ISSUE_DB", str(_DB_DEFAULT)))
 
 
 def load_db() -> Dict[str, Any]:

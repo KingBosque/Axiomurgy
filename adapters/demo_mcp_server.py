@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Demo MCP server for Axiomurgy (stdio JSON-RPC).
+"""Demo MCP server for Axiomurgy.
 
 Features:
-- resources/list + resources/read over local primer files
-- tools/call for stage_note, delete_note, extract_headlines
+- resources/list over local primer documents (repo `primers/`)
+- resources/read for those documents
+- tools/call for stage_note, delete_note, and extract_headlines
 
 Transport: stdio with newline-delimited JSON-RPC 2.0.
 """
@@ -26,20 +27,19 @@ def list_primer_files() -> List[Path]:
     files = sorted(PRIMERS_DIR.glob("primer*.txt"))
     if files:
         return files
-    # Fallback: treat key repo docs as primers.
     fallbacks = [REPO_ROOT / "AXIOMURGY_SPEC.md", REPO_ROOT / "README.md"]
     return [p for p in fallbacks if p.exists()]
 
 
 def primer_resources() -> List[Dict[str, Any]]:
-    resources: List[Dict[str, Any]] = []
+    resources = []
     for idx, path in enumerate(list_primer_files(), start=1):
         resources.append(
             {
                 "uri": f"upload://primer/{idx}",
                 "name": path.name,
                 "title": f"Primer transcript {idx}",
-                "description": f"Local primer resource backed by {path}",
+                "description": f"Uploaded transcript resource backed by {path}",
                 "mimeType": "text/plain",
             }
         )
@@ -75,7 +75,7 @@ def handle_request(payload: Dict[str, Any]) -> Dict[str, Any] | None:
             message_id,
             {
                 "protocolVersion": params.get("protocolVersion", "2025-06-18"),
-                "serverInfo": {"name": "axiomurgy-demo-mcp", "version": "0.2.0"},
+                "serverInfo": {"name": "axiomurgy-demo-mcp", "version": "0.3.0"},
                 "capabilities": {"resources": {}, "tools": {}},
             },
         )
@@ -111,8 +111,11 @@ def handle_request(payload: Dict[str, Any]) -> Dict[str, Any] | None:
                         "inputSchema": {
                             "type": "object",
                             "required": ["path", "content"],
-                            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
-                        },
+                            "properties": {
+                                "path": {"type": "string"},
+                                "content": {"type": "string"}
+                            }
+                        }
                     },
                     {
                         "name": "delete_note",
@@ -121,8 +124,10 @@ def handle_request(payload: Dict[str, Any]) -> Dict[str, Any] | None:
                         "inputSchema": {
                             "type": "object",
                             "required": ["path"],
-                            "properties": {"path": {"type": "string"}},
-                        },
+                            "properties": {
+                                "path": {"type": "string"}
+                            }
+                        }
                     },
                     {
                         "name": "extract_headlines",
@@ -131,9 +136,11 @@ def handle_request(payload: Dict[str, Any]) -> Dict[str, Any] | None:
                         "inputSchema": {
                             "type": "object",
                             "required": ["texts"],
-                            "properties": {"texts": {"type": "array", "items": {"type": "string"}}},
-                        },
-                    },
+                            "properties": {
+                                "texts": {"type": "array", "items": {"type": "string"}}
+                            }
+                        }
+                    }
                 ]
             },
         )
@@ -155,10 +162,10 @@ def handle_request(payload: Dict[str, Any]) -> Dict[str, Any] | None:
                             "type": "resource_link",
                             "uri": f"file://{target}",
                             "name": target.name,
-                            "mimeType": "text/markdown",
-                        },
+                            "mimeType": "text/markdown"
+                        }
                     ],
-                    "structuredContent": {"path": str(target), "status": "written"},
+                    "structuredContent": {"path": str(target), "status": "written"}
                 },
             )
         if name == "delete_note":
@@ -171,7 +178,7 @@ def handle_request(payload: Dict[str, Any]) -> Dict[str, Any] | None:
                 message_id,
                 {
                     "content": [{"type": "text", "text": f"Deleted={existed} {target}"}],
-                    "structuredContent": {"path": str(target), "deleted": existed},
+                    "structuredContent": {"path": str(target), "deleted": existed}
                 },
             )
         if name == "extract_headlines":
@@ -184,7 +191,7 @@ def handle_request(payload: Dict[str, Any]) -> Dict[str, Any] | None:
                 message_id,
                 {
                     "content": [{"type": "text", "text": "\n".join(headlines)}],
-                    "structuredContent": {"headlines": headlines},
+                    "structuredContent": {"headlines": headlines}
                 },
             )
         return error(message_id, -32602, f"Unknown tool: {name}")
