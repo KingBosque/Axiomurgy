@@ -1,0 +1,52 @@
+{
+  "spell": "research_brief",
+  "intent": "Read research notes, create a concise brief, review it, and stage it for publication.",
+  "inputs": {
+    "sources": [
+      "A programmable magic system for AIs should treat tools as ritual instruments, memory as an unreliable familiar, and provenance as a witness.",
+      "The system should distinguish between what actually works and what users merely believe works. It should also support approval gates for high-risk actions.",
+      "We want a world where models do not win by raw power but by composition, verification, and the quality of their evidence."
+    ]
+  },
+  "constraints": {
+    "risk": "medium",
+    "max_tokens": 24000,
+    "required_capabilities": ["read", "transform", "verify", "write"]
+  },
+  "graph": [
+    {
+      "id": "gather",
+      "rune": "mirror.read",
+      "effect": "read",
+      "args": {"input": "$inputs.sources"}
+    },
+    {
+      "id": "brief",
+      "rune": "forge.summarize",
+      "effect": "transform",
+      "args": {"from": "$gather"}
+    },
+    {
+      "id": "review",
+      "rune": "seal.review",
+      "effect": "verify",
+      "args": {
+        "from": "$brief",
+        "must_include": ["Source 1", "Source 2", "Source 3"]
+      }
+    },
+    {
+      "id": "stage",
+      "rune": "gate.emit",
+      "effect": "write",
+      "args": {
+        "from": "$review",
+        "target": "staging://briefs/research_brief"
+      }
+    }
+  ],
+  "witness": {
+    "record": true,
+    "format": "prov-like"
+  }
+}

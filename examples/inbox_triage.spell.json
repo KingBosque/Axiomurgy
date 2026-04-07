@@ -1,0 +1,55 @@
+{
+  "spell": "inbox_triage",
+  "intent": "Classify inbox items, draft replies, require approval, then archive the processed queue.",
+  "inputs": {
+    "messages": [
+      "Urgent: Please approve the vendor contract today.",
+      "Invoice 4182 attached for payment this week.",
+      "Thanks again for the meeting yesterday."
+    ]
+  },
+  "constraints": {
+    "risk": "high",
+    "max_tokens": 30000,
+    "required_capabilities": ["read", "reason", "transform", "approve", "write"]
+  },
+  "graph": [
+    {
+      "id": "read_mail",
+      "rune": "mirror.read",
+      "effect": "read",
+      "args": {"input": "$inputs.messages"}
+    },
+    {
+      "id": "labels",
+      "rune": "lantern.classify",
+      "effect": "transform",
+      "args": {"items": "$read_mail"}
+    },
+    {
+      "id": "drafts",
+      "rune": "forge.reply_drafts",
+      "effect": "transform",
+      "args": {"items": "$labels"}
+    },
+    {
+      "id": "approval",
+      "rune": "seal.approval_gate",
+      "effect": "approve",
+      "args": {
+        "reason": "External communication should be confirmed by a human.",
+        "auto_approve": false
+      }
+    },
+    {
+      "id": "archive",
+      "rune": "gate.archive",
+      "effect": "write",
+      "args": {"from": "$drafts"}
+    }
+  ],
+  "witness": {
+    "record": true,
+    "format": "prov-like"
+  }
+}

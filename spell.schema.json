@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/axiomurgy/spell.schema.json",
+  "title": "Axiomurgy Spell",
+  "type": "object",
+  "required": ["spell", "intent", "graph"],
+  "properties": {
+    "spell": {
+      "type": "string",
+      "minLength": 1
+    },
+    "intent": {
+      "type": "string",
+      "minLength": 1
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    },
+    "constraints": {
+      "type": "object",
+      "properties": {
+        "max_tokens": {"type": "integer", "minimum": 1},
+        "max_latency_s": {"type": "number", "minimum": 0},
+        "risk": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
+        "required_capabilities": {
+          "type": "array",
+          "items": {"type": "string"},
+          "uniqueItems": true,
+          "default": []
+        },
+        "requires_approval_for": {
+          "type": "array",
+          "items": {"type": "string"},
+          "uniqueItems": true,
+          "default": []
+        }
+      },
+      "additionalProperties": true,
+      "default": {}
+    },
+    "graph": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/step"
+      }
+    },
+    "witness": {
+      "type": "object",
+      "properties": {
+        "record": {"type": "boolean", "default": true},
+        "format": {"type": "string", "default": "prov-like"}
+      },
+      "additionalProperties": true,
+      "default": {"record": true, "format": "prov-like"}
+    },
+    "rollback": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/step"
+      },
+      "default": []
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "step": {
+      "type": "object",
+      "required": ["id", "rune"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_\\-]*$"
+        },
+        "rune": {
+          "type": "string",
+          "pattern": "^[a-z]+\\.[a-z_]+$"
+        },
+        "args": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        },
+        "requires": {
+          "type": "array",
+          "items": {"type": "string"},
+          "uniqueItems": true,
+          "default": []
+        },
+        "produces": {
+          "type": "string"
+        },
+        "effect": {
+          "type": "string",
+          "enum": ["read", "transform", "verify", "write", "approve", "simulate"],
+          "default": "transform"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
