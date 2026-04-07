@@ -1,0 +1,17 @@
+---
+description: Spell, schema, policy, and adapter guidance
+globs:
+  - "**/*.spell.json"
+  - "**/spell.schema.json"
+  - "**/default.policy.json"
+  - "**/*.openapi.yaml"
+  - "**/*.openapi.yml"
+  - "**/examples/*.json"
+alwaysApply: false
+---
+
+- Spell examples should remain runnable and demonstrate a specific concept.
+- Schema changes must preserve backwards clarity or come with migration notes.
+- Keep policy defaults conservative: risky writes should require approval.
+- Adapters are demos, not security boundaries. Document assumptions clearly.
+- If you add a new spell field, update `spell.schema.json`, `README.md`, and at least one example.

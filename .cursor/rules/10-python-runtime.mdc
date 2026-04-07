@@ -1,0 +1,13 @@
+---
+description: Python runtime rules for Axiomurgy
+globs:
+  - "**/*.py"
+alwaysApply: false
+---
+
+- Favor standard library solutions unless a dependency already exists in `requirements.txt`.
+- Keep the runtime easy to inspect: explicit dataclasses, small helpers, clear exceptions.
+- Do not introduce arbitrary shell execution or unbounded code evaluation into the runtime.
+- For new runes, add tests and at least one example or fixture showing intended behavior.
+- Avoid hidden global state. If state is needed, keep it scoped to the execution context.
+- If you change trace or witness structure, update smoke checks and docs.
