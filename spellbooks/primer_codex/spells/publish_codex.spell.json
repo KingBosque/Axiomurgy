@@ -1,0 +1,92 @@
+{
+  "spell": "primer_codex_publish_v0_5",
+  "intent": "Package the bundled magic-system primers into a codex artifact with deterministic proof-carrying witnesses.",
+  "inputs": {
+    "sources": [
+      "../../../primers/primer_01.txt",
+      "../../../primers/primer_02.txt",
+      "../../../primers/primer_03.txt",
+      "../../../primers/primer_04.txt",
+      "../../../primers/primer_05.txt",
+      "../../../primers/primer_06.txt",
+      "../../../primers/primer_07.txt"
+    ]
+  },
+  "constraints": {
+    "risk": "medium",
+    "required_capabilities": ["read", "transform", "verify", "write"],
+    "requires_approval_for": ["write"]
+  },
+  "graph": [
+    {
+      "id": "gather",
+      "rune": "mirror.read",
+      "effect": "read",
+      "args": {"input": "$inputs.sources"}
+    },
+    {
+      "id": "codex",
+      "rune": "forge.summarize",
+      "effect": "transform",
+      "args": {"from": "$gather", "title": "Axiomurgy Primer Codex v0.5"}
+    },
+    {
+      "id": "validate_sections",
+      "rune": "seal.assert_contains_sections",
+      "effect": "verify",
+      "requires": ["codex"],
+      "args": {
+        "target": "$codex",
+        "target_name": "primer codex draft",
+        "sections": ["Recurring themes", "Source 1", "Source 7", "Axiomurgy notes"]
+      }
+    },
+    {
+      "id": "validate_markers",
+      "rune": "seal.assert_markers",
+      "effect": "verify",
+      "requires": ["codex"],
+      "args": {
+        "target": "$codex",
+        "target_name": "primer codex draft",
+        "markers": [
+          "Strong systems benefit from explicit rules",
+          "A believable magical culture needs both the rules that work",
+          "Conflicts become more interesting when the system rewards counters"
+        ]
+      }
+    },
+    {
+      "id": "publish",
+      "rune": "gate.file_write",
+      "effect": "write",
+      "requires": ["validate_sections", "validate_markers"],
+      "args": {
+        "from": "$codex",
+        "path": "../artifacts/primer_codex_v0_5.md"
+      }
+    },
+    {
+      "id": "validate_publish_schema",
+      "rune": "seal.assert_jsonschema",
+      "effect": "verify",
+      "requires": ["publish"],
+      "args": {
+        "target": "$publish",
+        "target_name": "primer codex publish result",
+        "schema": "../schemas/file_write_result.schema.json"
+      }
+    },
+    {
+      "id": "validate_written_path",
+      "rune": "seal.assert_path_exists",
+      "effect": "verify",
+      "requires": ["publish"],
+      "args": {
+        "path": "$publish.path",
+        "target_name": "primer codex artifact"
+      }
+    }
+  ],
+  "witness": {"record": true, "format": "prov-like"}
+}

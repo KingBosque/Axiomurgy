@@ -15,12 +15,12 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Any, Dict, List
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 if hasattr(sys.stdin, "reconfigure"):
     sys.stdin.reconfigure(encoding="utf-8")
-from typing import Any, Dict, List
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE = (ROOT / "axiomurgy_workspace").resolve()
@@ -76,7 +76,7 @@ def handle_request(payload: Dict[str, Any]) -> Dict[str, Any] | None:
             message_id,
             {
                 "protocolVersion": params.get("protocolVersion", "2025-06-18"),
-                "serverInfo": {"name": "axiomurgy-demo-mcp", "version": "0.4.0"},
+                "serverInfo": {"name": "axiomurgy-demo-mcp", "version": "0.5.0"},
                 "capabilities": {"resources": {}, "tools": {}},
             },
         )

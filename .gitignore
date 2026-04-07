@@ -1,4 +1,5 @@
 artifacts/
+spellbooks/**/artifacts/
 axiomurgy_workspace/
 axiomurgy_mock_issues.json
 __pycache__/

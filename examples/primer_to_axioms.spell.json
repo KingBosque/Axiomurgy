@@ -1,6 +1,6 @@
 {
-  "spell": "primer_to_axioms_v0_4",
-  "intent": "Read the bundled magic-system primers, synthesize recurring themes, and publish a relay-start artifact.",
+  "spell": "primer_to_axioms_v0_5",
+  "intent": "Read the bundled magic-system primers, synthesize recurring themes, and publish a relay-start artifact with deterministic validators.",
   "inputs": {
     "sources": [
       "../primers/primer_01.txt",
@@ -43,45 +43,50 @@
       }
     },
     {
-      "id": "review",
-      "rune": "seal.review",
+      "id": "validate_sections",
+      "rune": "seal.assert_contains_sections",
       "effect": "verify",
+      "requires": [
+        "brief"
+      ],
       "args": {
-        "from": "$brief",
-        "must_include": [
+        "target": "$brief",
+        "target_name": "direct primer brief",
+        "sections": [
           "Recurring themes",
           "Source 1",
           "Source 7",
           "Axiomurgy notes"
         ]
-      },
-      "output_schema": {
-        "type": "object",
-        "required": [
-          "approved",
-          "missing",
-          "artifact"
-        ],
-        "properties": {
-          "approved": {
-            "type": "boolean"
-          },
-          "missing": {
-            "type": "array"
-          },
-          "artifact": {
-            "type": "string"
-          }
-        }
+      }
+    },
+    {
+      "id": "validate_markers",
+      "rune": "seal.assert_markers",
+      "effect": "verify",
+      "requires": [
+        "brief"
+      ],
+      "args": {
+        "target": "$brief",
+        "target_name": "direct primer brief",
+        "markers": [
+          "Strong systems benefit from explicit rules",
+          "A believable magical culture needs both the rules that work"
+        ]
       }
     },
     {
       "id": "publish",
       "rune": "gate.file_write",
       "effect": "write",
+      "requires": [
+        "validate_sections",
+        "validate_markers"
+      ],
       "args": {
         "from": "$brief",
-        "path": "../artifacts/primer_to_axioms_v0_4.md"
+        "path": "../artifacts/primer_to_axioms_v0_5.md"
       }
     }
   ],

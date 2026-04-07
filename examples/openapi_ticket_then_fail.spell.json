@@ -1,15 +1,135 @@
 {
-  "spell": "openapi_ticket_then_fail_v0_4",
+  "spell": "openapi_ticket_then_fail_v0_5",
   "intent": "Create a local issue through OpenAPI and then fail intentionally to exercise rollback semantics.",
-  "inputs": {"summary": "Implement richer rollback semantics for Axiomurgy gate steps and keep provenance attached to every compensation action."},
-  "constraints": {"risk": "high", "required_capabilities": ["transform", "verify", "write"], "requires_approval_for": ["write"]},
+  "inputs": {
+    "summary": "Implement richer rollback semantics for Axiomurgy gate steps and keep provenance attached to every compensation action."
+  },
+  "constraints": {
+    "risk": "high",
+    "required_capabilities": [
+      "transform",
+      "verify",
+      "write"
+    ],
+    "requires_approval_for": [
+      "write"
+    ]
+  },
   "graph": [
-    {"id": "draft", "rune": "forge.template", "effect": "transform", "args": {"template": "Axiomurgy follow-up\n\nSummary: {summary}\n\nAcceptance criteria:\n- rollback after post-write failure\n- compensation events in provenance\n- explicit approval gate before external writes\n", "bindings": {"summary": "$inputs.summary"}}},
-    {"id": "create_ticket", "rune": "gate.openapi_call", "effect": "write", "args": {"spec": "../adapters/mock_issue_api.openapi.yaml", "operationId": "createTicket", "arguments": {"body": {"title": "Axiomurgy v0.4 rollback milestone", "description": "$draft", "labels": ["relay", "rollback", "provenance"]}}}, "output_schema": {"type": "object", "required": ["status", "method", "url", "status_code", "body"], "properties": {"status": {"type": "string"}, "method": {"type": "string"}, "url": {"type": "string"}, "status_code": {"type": "integer"}, "body": {"type": "object", "required": ["id", "title", "description", "labels"], "properties": {"id": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"}, "labels": {"type": "array", "items": {"type": "string"}}}}}}},
-    {"id": "force_failure", "rune": "seal.require", "effect": "verify", "requires": ["create_ticket"], "args": {"value": false, "equals": true, "message": "Intentional post-write failure to test compensation."}}
+    {
+      "id": "draft",
+      "rune": "forge.template",
+      "effect": "transform",
+      "args": {
+        "template": "Axiomurgy follow-up\n\nSummary: {summary}\n\nAcceptance criteria:\n- rollback after post-write failure\n- compensation events in provenance\n- explicit approval gate before external writes\n",
+        "bindings": {
+          "summary": "$inputs.summary"
+        }
+      }
+    },
+    {
+      "id": "create_ticket",
+      "rune": "gate.openapi_call",
+      "effect": "write",
+      "args": {
+        "spec": "../adapters/mock_issue_api.openapi.yaml",
+        "operationId": "createTicket",
+        "arguments": {
+          "body": {
+            "title": "Axiomurgy v0.5 rollback milestone",
+            "description": "$draft",
+            "labels": [
+              "relay",
+              "rollback",
+              "provenance"
+            ]
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "status",
+          "method",
+          "url",
+          "status_code",
+          "body"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "status_code": {
+            "type": "integer"
+          },
+          "body": {
+            "type": "object",
+            "required": [
+              "id",
+              "title",
+              "description",
+              "labels"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "labels": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "force_failure",
+      "rune": "seal.require",
+      "effect": "verify",
+      "requires": [
+        "create_ticket"
+      ],
+      "args": {
+        "value": false,
+        "equals": true,
+        "message": "Intentional post-write failure to test compensation."
+      }
+    }
   ],
   "rollback": [
-    {"id": "delete_ticket", "compensates": "create_ticket", "rune": "gate.openapi_call", "effect": "write", "args": {"spec": "../adapters/mock_issue_api.openapi.yaml", "operationId": "deleteTicket", "arguments": {"path": {"ticketId": "$create_ticket.body.id"}}}}
+    {
+      "id": "delete_ticket",
+      "compensates": "create_ticket",
+      "rune": "gate.openapi_call",
+      "effect": "write",
+      "args": {
+        "spec": "../adapters/mock_issue_api.openapi.yaml",
+        "operationId": "deleteTicket",
+        "arguments": {
+          "path": {
+            "ticketId": "$create_ticket.body.id"
+          }
+        }
+      }
+    }
   ],
-  "witness": {"record": true, "format": "prov-like"}
+  "witness": {
+    "record": true,
+    "format": "prov-like"
+  }
 }

@@ -1,0 +1,20 @@
+{
+  "name": "primer_codex",
+  "version": "0.5.0",
+  "description": "Packaged primer synthesis spellbook with proof-carrying witnesses.",
+  "default_entrypoint": "publish_codex",
+  "required_capabilities": ["read", "transform", "verify", "write"],
+  "default_policy": "../../policies/default.policy.json",
+  "validators": [
+    "seal.assert_contains_sections",
+    "seal.assert_markers",
+    "seal.assert_jsonschema",
+    "seal.assert_path_exists"
+  ],
+  "artifacts_dir": "artifacts",
+  "entrypoints": {
+    "publish_codex": {
+      "spell": "spells/publish_codex.spell.json"
+    }
+  }
+}

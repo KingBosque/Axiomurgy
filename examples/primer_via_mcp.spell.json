@@ -1,5 +1,5 @@
 {
-  "spell": "primer_via_mcp_v0_4",
+  "spell": "primer_via_mcp_v0_5",
   "intent": "Read the bundled primers through MCP resources, synthesize them, and stage the result through an MCP tool.",
   "inputs": {},
   "constraints": {
@@ -33,21 +33,25 @@
       "effect": "transform",
       "args": {
         "from": "$gather.texts",
-        "title": "Axiomurgy MCP Primer Relay"
+        "title": "Axiomurgy MCP Primer Relay v0.5"
       }
     },
     {
-      "id": "review",
-      "rune": "seal.review",
+      "id": "validate_sections",
+      "rune": "seal.assert_contains_sections",
       "effect": "verify",
       "args": {
-        "from": "$brief",
-        "must_include": [
+        "target": "$brief",
+        "target_name": "mcp primer brief",
+        "sections": [
           "Recurring themes",
           "Source 1",
           "Source 7"
         ]
-      }
+      },
+      "requires": [
+        "brief"
+      ]
     },
     {
       "id": "stage",
@@ -60,10 +64,13 @@
         ],
         "name": "stage_note",
         "arguments": {
-          "path": "relay/primer_via_mcp_v0_4.md",
+          "path": "relay/primer_via_mcp_v0_5.md",
           "content": "$brief"
         }
-      }
+      },
+      "requires": [
+        "validate_sections"
+      ]
     }
   ],
   "witness": {

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["path", "mode", "bytes", "sha256", "status"],
+  "properties": {
+    "path": {"type": "string", "minLength": 1},
+    "mode": {"type": "string", "const": "text"},
+    "bytes": {"type": "integer", "minimum": 1},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "status": {"type": "string", "const": "written"}
+  },
+  "additionalProperties": false
+}
