@@ -1,26 +1,27 @@
-# Axiomurgy v0.3 relay notes
+# Axiomurgy v0.4 relay notes
 
 What this lap adds:
+- fixes the broken v0.3 package by restoring `policies/` and `adapters/`
+- makes the repo self-contained by copying the seven primer transcripts into `primers/`
+- adds a real install file in `requirements.txt`
+- adds fast tests and an end-to-end smoke script
+- adds Cursor-native handoff files: `AGENTS.md`, `.cursor/rules/`, `.cursor/environment.json`
+- defines the next milestone in `NEXT_LAP_SPEC.md`
 
-- a real runtime with JSON Schema validation
-- dependency-aware planning that preserves intended order while respecting references
-- policy checks and explicit approval handling
-- compensation on failed write workflows
-- witness exports: trace JSON, PROV-like JSON, and SCXML
-- MCP resource reads and tool calls
-- OpenAPI contract execution with response validation
-- confidence and entropy tracking per step
+Windows note: the runtime resolves spell-relative paths for `mirror.read`, uses `sys.executable` for MCP `python`/`python3` server commands, sets `PYTHONIOENCODING=utf-8` (and UTF-8 stdio in the demo MCP server) so JSON-RPC over pipes does not hit `cp1252`/`UnicodeEncodeError` on primer content, stores the mock issue DB and MCP workspace under the repo root (`axiomurgy_mock_issues.json`, `axiomurgy_workspace/`), and the README uses PowerShell for quick start.
 
-Verified demos:
+Verified demos in this relay:
+- `examples/primer_to_axioms.spell.json`
+- `examples/primer_via_mcp.spell.json`
+- `examples/openapi_ticket_then_fail.spell.json`
 
-- `examples/primer_to_axioms.spell.json` writes `artifacts/primer_to_axioms_v0_3.md`
-- `examples/primer_via_mcp.spell.json` stages `axiomurgy_workspace/relay/primer_via_mcp_v0_3.md`
-- `examples/openapi_ticket_then_fail.spell.json` fails intentionally and compensates the created ticket
+Why this lap exists:
+- Cursor can do better work when the repo is self-describing
+- the previous zip had enough structure to inspire coding but not enough guidance to steer it consistently
+- fixing packaging and adding repeatable checks is a better relay move than piling on one more speculative feature
 
 Suggested next relay:
-
-- proof-carrying spells
-- richer policy VM
-- parallel branches in the planner
-- stronger semantic validators
-- a first-class spellbook / package format
+- spellbook package format
+- validator runes and proof-carrying witnesses
+- richer final-result summaries for downstream agents
+- stronger docs around safety boundaries and trusted execution

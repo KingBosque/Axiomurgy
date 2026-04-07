@@ -3,3 +3,6 @@ axiomurgy_workspace/
 axiomurgy_mock_issues.json
 __pycache__/
 *.pyc
+.pytest_cache/
+tests/__pycache__/
+workspace/

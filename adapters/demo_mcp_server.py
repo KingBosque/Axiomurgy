@@ -2,7 +2,7 @@
 """Demo MCP server for Axiomurgy.
 
 Features:
-- resources/list over local primer documents (repo `primers/`)
+- resources/list over bundled primer documents in the repo
 - resources/read for those documents
 - tools/call for stage_note, delete_note, and extract_headlines
 
@@ -15,20 +15,21 @@ import json
 import re
 import sys
 from pathlib import Path
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stdin, "reconfigure"):
+    sys.stdin.reconfigure(encoding="utf-8")
 from typing import Any, Dict, List
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-PRIMERS_DIR = REPO_ROOT / "primers"
-WORKSPACE = REPO_ROOT / "axiomurgy_workspace"
+ROOT = Path(__file__).resolve().parents[1]
+WORKSPACE = (ROOT / "axiomurgy_workspace").resolve()
 WORKSPACE.mkdir(parents=True, exist_ok=True)
+PRIMER_DIR = ROOT / "primers"
 
 
 def list_primer_files() -> List[Path]:
-    files = sorted(PRIMERS_DIR.glob("primer*.txt"))
-    if files:
-        return files
-    fallbacks = [REPO_ROOT / "AXIOMURGY_SPEC.md", REPO_ROOT / "README.md"]
-    return [p for p in fallbacks if p.exists()]
+    return sorted(PRIMER_DIR.glob("primer_*.txt"))
 
 
 def primer_resources() -> List[Dict[str, Any]]:
@@ -75,7 +76,7 @@ def handle_request(payload: Dict[str, Any]) -> Dict[str, Any] | None:
             message_id,
             {
                 "protocolVersion": params.get("protocolVersion", "2025-06-18"),
-                "serverInfo": {"name": "axiomurgy-demo-mcp", "version": "0.3.0"},
+                "serverInfo": {"name": "axiomurgy-demo-mcp", "version": "0.4.0"},
                 "capabilities": {"resources": {}, "tools": {}},
             },
         )

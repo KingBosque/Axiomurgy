@@ -1,11 +1,18 @@
 {
-  "spell": "primer_via_mcp_v0_3",
-  "intent": "Read local primers through MCP resources, synthesize them, and stage the result through an MCP tool.",
+  "spell": "primer_via_mcp_v0_4",
+  "intent": "Read the bundled primers through MCP resources, synthesize them, and stage the result through an MCP tool.",
   "inputs": {},
   "constraints": {
     "risk": "medium",
-    "required_capabilities": ["read", "transform", "verify", "write"],
-    "requires_approval_for": ["write"]
+    "required_capabilities": [
+      "read",
+      "transform",
+      "verify",
+      "write"
+    ],
+    "requires_approval_for": [
+      "write"
+    ]
   },
   "graph": [
     {
@@ -13,7 +20,10 @@
       "rune": "mirror.mcp_read_resources",
       "effect": "read",
       "args": {
-        "server_cmd": ["python", "../adapters/demo_mcp_server.py"],
+        "server_cmd": [
+          "python",
+          "../adapters/demo_mcp_server.py"
+        ],
         "pattern": "Primer transcript"
       }
     },
@@ -21,7 +31,10 @@
       "id": "brief",
       "rune": "forge.summarize",
       "effect": "transform",
-      "args": { "from": "$gather.texts", "title": "Axiomurgy MCP Primer Relay" }
+      "args": {
+        "from": "$gather.texts",
+        "title": "Axiomurgy MCP Primer Relay"
+      }
     },
     {
       "id": "review",
@@ -29,7 +42,11 @@
       "effect": "verify",
       "args": {
         "from": "$brief",
-        "must_include": ["Recurring themes", "Source 1", "Source 7"]
+        "must_include": [
+          "Recurring themes",
+          "Source 1",
+          "Source 7"
+        ]
       }
     },
     {
@@ -37,15 +54,20 @@
       "rune": "gate.mcp_call_tool",
       "effect": "write",
       "args": {
-        "server_cmd": ["python", "../adapters/demo_mcp_server.py"],
+        "server_cmd": [
+          "python",
+          "../adapters/demo_mcp_server.py"
+        ],
         "name": "stage_note",
         "arguments": {
-          "path": "relay/primer_via_mcp_v0_3.md",
+          "path": "relay/primer_via_mcp_v0_4.md",
           "content": "$brief"
         }
-      },
-      "requires": ["review"]
+      }
     }
   ],
-  "witness": { "record": true, "format": "prov-like" }
+  "witness": {
+    "record": true,
+    "format": "prov-like"
+  }
 }

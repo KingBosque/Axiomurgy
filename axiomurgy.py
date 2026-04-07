@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, hashlib, heapq, json, re, shlex, subprocess, sys, uuid
+import argparse, hashlib, heapq, json, os, re, shlex, subprocess, sys, uuid
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 import jsonschema, requests, yaml
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 ROOT = Path(__file__).resolve().parent
 DEFAULT_POLICY_PATH = ROOT / "policies" / "default.policy.json"
 DEFAULT_SCHEMA_PATH = ROOT / "spell.schema.json"
@@ -181,7 +181,20 @@ class MCPClient:
     def __init__(self, cmd: Sequence[str]) -> None:
         self.cmd = list(cmd)
         self._id = 0
-        self.proc = subprocess.Popen(self.cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+        env = os.environ.copy()
+        env.setdefault("PYTHONUNBUFFERED", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        popen_kw: Dict[str, Any] = {
+            "stdin": subprocess.PIPE,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.DEVNULL,
+            "text": True,
+            "encoding": "utf-8",
+            "errors": "replace",
+            "bufsize": 1,
+            "env": env,
+        }
+        self.proc = subprocess.Popen(self.cmd, **popen_kw)
         self.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "axiomurgy", "version": VERSION}})
         self.notify("notifications/initialized", {})
     def _write(self, payload: Dict[str, Any]) -> None:

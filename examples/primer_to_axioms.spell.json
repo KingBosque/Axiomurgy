@@ -1,34 +1,46 @@
 {
-  "spell": "primer_to_axioms_v0_3",
-  "intent": "Read local magic-system primers, synthesize recurring themes, and publish a relay-start artifact.",
+  "spell": "primer_to_axioms_v0_4",
+  "intent": "Read the bundled magic-system primers, synthesize recurring themes, and publish a relay-start artifact.",
   "inputs": {
     "sources": [
-      "primers/primer1.txt",
-      "primers/primer2.txt",
-      "primers/primer3.txt",
-      "primers/primer4.txt",
-      "primers/primer5.txt",
-      "primers/primer6.txt",
-      "primers/primer7.txt"
+      "../primers/primer_01.txt",
+      "../primers/primer_02.txt",
+      "../primers/primer_03.txt",
+      "../primers/primer_04.txt",
+      "../primers/primer_05.txt",
+      "../primers/primer_06.txt",
+      "../primers/primer_07.txt"
     ]
   },
   "constraints": {
     "risk": "medium",
-    "required_capabilities": ["read", "transform", "verify", "write"],
-    "requires_approval_for": ["write"]
+    "required_capabilities": [
+      "read",
+      "transform",
+      "verify",
+      "write"
+    ],
+    "requires_approval_for": [
+      "write"
+    ]
   },
   "graph": [
     {
       "id": "gather",
       "rune": "mirror.read",
       "effect": "read",
-      "args": { "input": "$inputs.sources" }
+      "args": {
+        "input": "$inputs.sources"
+      }
     },
     {
       "id": "brief",
       "rune": "forge.summarize",
       "effect": "transform",
-      "args": { "from": "$gather", "title": "Axiomurgy Primer Codex" }
+      "args": {
+        "from": "$gather",
+        "title": "Axiomurgy Primer Codex"
+      }
     },
     {
       "id": "review",
@@ -36,15 +48,30 @@
       "effect": "verify",
       "args": {
         "from": "$brief",
-        "must_include": ["Recurring themes", "Source 1", "Source 7", "Axiomurgy notes"]
+        "must_include": [
+          "Recurring themes",
+          "Source 1",
+          "Source 7",
+          "Axiomurgy notes"
+        ]
       },
       "output_schema": {
         "type": "object",
-        "required": ["approved", "missing", "artifact"],
+        "required": [
+          "approved",
+          "missing",
+          "artifact"
+        ],
         "properties": {
-          "approved": { "type": "boolean" },
-          "missing": { "type": "array" },
-          "artifact": { "type": "string" }
+          "approved": {
+            "type": "boolean"
+          },
+          "missing": {
+            "type": "array"
+          },
+          "artifact": {
+            "type": "string"
+          }
         }
       }
     },
@@ -54,10 +81,12 @@
       "effect": "write",
       "args": {
         "from": "$brief",
-        "path": "../artifacts/primer_to_axioms_v0_3.md"
-      },
-      "requires": ["review"]
+        "path": "../artifacts/primer_to_axioms_v0_4.md"
+      }
     }
   ],
-  "witness": { "record": true, "format": "prov-like" }
+  "witness": {
+    "record": true,
+    "format": "prov-like"
+  }
 }

@@ -25,7 +25,7 @@ def save_db(db: Dict[str, Any]) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "AxiomurgyMockIssueServer/0.2"
+    server_version = "AxiomurgyMockIssueServer/0.4"
 
     def _read_json(self) -> Dict[str, Any]:
         length = int(self.headers.get("Content-Length", "0"))

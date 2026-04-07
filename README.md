@@ -1,8 +1,23 @@
-# Axiomurgy v0.3
+# Axiomurgy v0.4
 
 Axiomurgy is a programmable magical system for AIs.
 
-This pass makes the project concrete rather than merely descriptive:
+This relay does two things:
+
+1. repairs the broken v0.3 package so the repo is runnable again
+2. adds Cursor-native scaffolding so Cursor can carry the next lap with less prompt babysitting
+
+## What changed in v0.4
+
+- restored missing `policies/` and `adapters/` directories
+- copied the seven uploaded primer transcripts into `primers/` so the repo is self-contained
+- renamed the demo outputs to `v0_4`
+- added `requirements.txt`
+- added `scripts/smoke.sh` and `tests/test_runtime.py`
+- added `AGENTS.md`, `.cursor/rules/`, and `.cursor/environment.json`
+- wrote a concrete next-milestone brief in `NEXT_LAP_SPEC.md`
+
+## Core features
 
 - JSON Schema spell validation
 - dependency-aware execution planning
@@ -13,61 +28,78 @@ This pass makes the project concrete rather than merely descriptive:
 - OpenAPI-driven HTTP calls
 - lightweight confidence and entropy tracking
 
-## Project layout
+## Repository map
 
-- [`axiomurgy.py`](axiomurgy.py) — runtime (CLI)
-- [`spell.schema.json`](spell.schema.json) — spell contract
-- [`requirements.txt`](requirements.txt) — Python dependencies
-- [`policies/default.policy.json`](policies/default.policy.json) — reference policy
-- [`adapters/`](adapters/) — MCP demo server and OpenAPI mock issue server
-- [`examples/`](examples/) — v0.3 demos; [`examples/research_brief.spell.json`](examples/research_brief.spell.json) and [`examples/inbox_triage.spell.json`](examples/inbox_triage.spell.json) are smaller smoke examples compatible with this schema
-- [`primers/`](primers/) — local text inputs for primer relays
-- [`artifacts/`](artifacts/) — generated traces, PROV JSON, SCXML (gitignored)
-- [`RELAY_NOTES.md`](RELAY_NOTES.md) — relay changelog and verification notes
+- `axiomurgy.py` — reference runtime
+- `spell.schema.json` — spell contract
+- `examples/` — runnable demo spells (plus smaller smoke spells `research_brief.spell.json` and `inbox_triage.spell.json` compatible with this schema)
+- `primers/` — local copies of the seven primer transcripts
+- `adapters/` — demo MCP and OpenAPI servers
+- `policies/` — default runtime policy
+- `artifacts/` — generated outputs and witnesses
+- `axiomurgy_workspace/` — MCP demo staging (gitignored)
+- `scripts/smoke.sh` — end-to-end verification (Git Bash / WSL on Windows)
+- `tests/test_runtime.py` — fast regression checks
+- `AGENTS.md` and `.cursor/rules/` — Cursor handoff
+
+## Install
+
+From the repository root:
+
+```powershell
+python -m pip install -r requirements.txt
+```
 
 ## Quick start (Windows PowerShell)
 
-Install dependencies:
+Run the direct-file primer relay:
 
-```bash
-pip install -r requirements.txt
-```
-
-Run the direct-file primer relay (approves the write step `publish`):
-
-```bash
+```powershell
 python axiomurgy.py examples/primer_to_axioms.spell.json --approve publish
 ```
 
-Run the MCP relay (approves the write step `stage`):
+Run the MCP relay:
 
-```bash
+```powershell
 python axiomurgy.py examples/primer_via_mcp.spell.json --approve stage
 ```
 
-Run the OpenAPI rollback demo:
+Run the OpenAPI rollback demo (start the mock server in a second terminal, then run the spell):
 
-```bash
-# Terminal A: start the mock issue API
+```powershell
 python adapters/mock_issue_server.py
+```
 
-# Terminal B: expect failure after the write, then compensation deletes the ticket
+```powershell
 python axiomurgy.py examples/openapi_ticket_then_fail.spell.json --approve create_ticket
 ```
 
-That final command is expected to **fail intentionally** after the write and then **compensate** (delete) the created ticket.
+That final command is expected to return a result whose spell status is `failed`, because the spell intentionally triggers a post-write failure in order to exercise compensation.
 
-Optional flags:
+## Validation
 
-- `--policy path\to\policy.json` (defaults to `policies/default.policy.json`)
-- `--artifact-dir path\to\artifacts` (defaults to `artifacts`)
-- `--simulate` to suppress real external writes where supported
+Fast tests:
 
-## Smaller examples
+```powershell
+python -m pytest -q
+```
 
-Policy may require explicit approvals for writes at medium risk or above. For a quick run:
+Full smoke (requires `bash`, e.g. Git Bash or WSL):
 
 ```bash
-python axiomurgy.py examples/research_brief.spell.json --approve stage
-python axiomurgy.py examples/inbox_triage.spell.json --approve approval --approve archive
+bash scripts/smoke.sh
 ```
+
+## Cursor workflow
+
+If you are using Cursor:
+
+- start with `AGENTS.md`
+- let project rules load from `.cursor/rules/`
+- use `CURSOR_PROMPTS.md` for ready-to-paste tasks
+- use `.cursor/environment.json` as the starter background-agent install config
+
+## Current project direction
+
+The next relay is defined in `NEXT_LAP_SPEC.md`.
+The short version: move from loose examples toward **spellbooks + stronger validators + proof-carrying witnesses**.
