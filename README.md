@@ -1,8 +1,8 @@
-# Axiomurgy v0.7
+# Axiomurgy v0.8
 
 Axiomurgy is a programmable magical system for AIs.
 
-This relay upgrades the runtime from **preflight + approval manifests** to a stronger **reviewed execution workflow**:
+This relay upgrades the runtime from **review bundles** to **portable review contracts**:
 - describe a spell or spellbook entrypoint
 - lint it deterministically before execution
 - compile a dry plan without side effects
@@ -10,15 +10,19 @@ This relay upgrades the runtime from **preflight + approval manifests** to a str
 - generate a single review bundle (describe + lint + plan + fingerprints)
 - verify a review bundle against current repo state
 - attest an execution against a reviewed bundle
+- produce diffable witnesses that are friendlier across machines (path normalization + redaction, timestamps removed)
+- run a cross-platform smoke runner (`python scripts/smoke.py`)
 
-## What changed in v0.7
+## What changed in v0.8
 
 - added content fingerprints surfaced in `--describe`, `--plan`, and execution results
 - added `--review-bundle` mode (describe + lint + plan + approval manifest + fingerprints + environment metadata)
 - added `--verify-review-bundle <bundle>` mode (exit nonzero on mismatch)
 - added execution attestation via `--review-bundle-in <bundle>`
-- made trace/prov/proofs JSON canonical (sorted keys) and explicitly marked nondeterministic fields
-- expanded tests and smoke coverage for review → verify → execute
+- made diffable trace/prov/proofs omit machine-specific absolute paths where possible (repo-relative POSIX) and redact otherwise
+- made raw witness artifacts strictly forensic (still contain wall-clock and machine-specific paths)
+- extended input manifests to classify unresolved dynamic inputs (attestation becomes `partial` by default when unresolved)
+- added `scripts/smoke.py` as the cross-platform smoke runner
 
 ## Core features
 
@@ -46,7 +50,8 @@ This relay upgrades the runtime from **preflight + approval manifests** to a str
 - `adapters/` - demo MCP and OpenAPI servers
 - `policies/` - default runtime policy
 - `artifacts/` - generated outputs and witnesses for direct examples
-- `scripts/smoke.sh` - end-to-end verification
+- `scripts/smoke.py` - end-to-end verification (cross-platform)
+- `scripts/smoke.sh` - legacy bash smoke
 - `tests/test_runtime.py` - regression checks
 - `AGENTS.md`, `CURSOR_PROMPTS.md`, and `.cursor/rules/` - Cursor handoff
 
@@ -203,7 +208,13 @@ Fast tests:
 python -m pytest -q
 ```
 
-Full smoke:
+Full smoke (cross-platform):
+
+```bash
+python scripts/smoke.py
+```
+
+Legacy bash smoke (requires `bash`, e.g. Git Bash or WSL):
 
 ```bash
 bash scripts/smoke.sh

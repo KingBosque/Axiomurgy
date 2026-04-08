@@ -114,6 +114,8 @@ assert trace['compensations'], trace
 assert any(item['status'] == 'compensated' for item in trace['compensations']), trace
 assert 'proofs' in trace, trace
 assert Path(run['proof_path']).exists(), run
+# Raw trace should exist for debugging (wall-clock timings preserved).
+assert (root / 'artifacts' / 'openapi_ticket_then_fail_v0_6.trace.raw.json').exists()
 PY
 
 echo "Axiomurgy smoke passed."

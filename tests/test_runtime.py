@@ -120,6 +120,85 @@ class AxiomurgyRuntimeTests(unittest.TestCase):
         attestation = self.runtime.compute_attestation(reviewed, resolved, approvals={"publish"})
         self.assertIn(attestation["status"], ("exact", "partial"))
 
+    def test_diffable_witness_trace_omits_timestamps_and_raw_preserves_them(self):
+        spell = self.runtime.load_spell(ROOT / "examples" / "primer_to_axioms.spell.json")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            result = self.runtime.execute_spell(
+                spell,
+                self.capabilities,
+                {"publish"},
+                False,
+                ROOT / "policies" / "default.policy.json",
+                out_dir,
+            )
+            diff_trace = json.loads(Path(result["trace_path"]).read_text(encoding="utf-8"))
+            raw_trace = json.loads((out_dir / f"{spell.name}.trace.raw.json").read_text(encoding="utf-8"))
+            # Diffable trace should not include timestamps/execution_id.
+            self.assertNotIn("execution_id", diff_trace)
+            self.assertNotIn("started_at", diff_trace)
+            self.assertNotIn("ended_at", diff_trace)
+            for event in diff_trace.get("events", []):
+                self.assertNotIn("started_at", event)
+                self.assertNotIn("ended_at", event)
+            # Raw trace should preserve timing fields.
+            self.assertIn("execution_id", raw_trace)
+            self.assertIn("started_at", raw_trace)
+            self.assertIn("ended_at", raw_trace)
+            self.assertTrue(raw_trace.get("events"))
+            self.assertIn("started_at", raw_trace["events"][0])
+            self.assertIn("ended_at", raw_trace["events"][0])
+
+    def test_fingerprint_repo_relpath_uses_posix_slashes(self):
+        resolved = self.runtime.resolve_run_target(ROOT / "spellbooks" / "primer_codex", None, None, None)
+        plan = self.runtime.build_plan_summary(resolved)
+        files = plan["fingerprints"]["files"]
+        self.assertTrue(files)
+        for item in files:
+            rel = item.get("repo_relpath")
+            if rel is None:
+                continue
+            self.assertNotIn("\\\\", rel)
+            # Top-level files like `spell.schema.json` legitimately contain no slashes.
+            if "/" in rel:
+                self.assertNotIn("\\\\", rel)
+
+    def test_proof_timestamp_not_auto_injected(self):
+        proof = self.runtime.normalize_proof({"validator": "x", "target": "y", "status": "passed"})
+        self.assertIn("timestamp", proof)
+        self.assertIsNone(proof["timestamp"])
+
+    def test_diffable_trace_path_values_are_portable(self):
+        spell = self.runtime.load_spell(ROOT / "examples" / "primer_to_axioms.spell.json")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            result = self.runtime.execute_spell(
+                spell,
+                self.capabilities,
+                {"publish"},
+                False,
+                ROOT / "policies" / "default.policy.json",
+                out_dir,
+            )
+            diff_trace = json.loads(Path(result["trace_path"]).read_text(encoding="utf-8"))
+            # Only enforce portability on structured path-like surfaces (args), not freeform text output previews.
+            for event in diff_trace.get("events", []):
+                args = (event or {}).get("args", {})
+                args_text = json.dumps(args)
+                self.assertNotRegex(args_text, r"[A-Za-z]:\\\\")
+                self.assertNotRegex(args_text, r"\\\\\\\\")
+
+    def test_unresolved_dynamic_inputs_surface_in_review_bundle_and_attestation(self):
+        resolved = self.runtime.resolve_run_target(ROOT / "spellbooks" / "primer_codex", None, None, None)
+        bundle = self.runtime.build_review_bundle(resolved)
+        summary = (
+            (((bundle.get("fingerprints") or {}).get("input_manifest") or {}).get("classification") or {}).get("summary") or {}
+        )
+        self.assertIn("unresolved_dynamic_present", summary)
+        self.assertTrue(summary["unresolved_dynamic_present"])
+        attestation = self.runtime.compute_attestation(bundle, resolved, approvals={"publish"})
+        self.assertIn(attestation["status"], ("partial", "mismatch"))
+
     def test_direct_primer_spell_succeeds_and_emits_proofs(self):
         spell = self.runtime.load_spell(ROOT / "examples" / "primer_to_axioms.spell.json")
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -136,6 +136,57 @@ def extract_declared_input_paths(spell: "Spell") -> List[Path]:
     return out
 
 
+def classify_input_manifest(spell: "Spell") -> Dict[str, Any]:
+    declared_static: List[Dict[str, Any]] = []
+    declared_dynamic: List[Dict[str, Any]] = []
+    unresolved_dynamic: List[Dict[str, Any]] = []
+
+    def add_static(spec: str, step_id: str, rune: str) -> None:
+        declared_static.append({"spec": spec, "step_id": step_id, "rune": rune})
+
+    def add_declared_dynamic(spec: Any, step_id: str, rune: str, note: str) -> None:
+        declared_dynamic.append({"spec": spec, "step_id": step_id, "rune": rune, "note": note})
+
+    def add_unresolved(spec: Any, step_id: str, rune: str, note: str) -> None:
+        unresolved_dynamic.append({"spec": spec, "step_id": step_id, "rune": rune, "note": note})
+
+    for step in list(spell.graph) + list(spell.rollback):
+        if step.rune == "mirror.read":
+            raw = step.args.get("input")
+            if isinstance(raw, list):
+                for item in raw:
+                    if isinstance(item, str) and not item.startswith("$"):
+                        add_static(item, step.step_id, step.rune)
+                    elif isinstance(item, str) and item.startswith("$"):
+                        add_declared_dynamic(item, step.step_id, step.rune, "mirror.read input references runtime value")
+            elif isinstance(raw, str):
+                if raw.startswith("$inputs"):
+                    # declared dynamic, but often resolvable from spell.inputs
+                    add_declared_dynamic(raw, step.step_id, step.rune, "mirror.read input references spell inputs")
+                elif raw.startswith("$"):
+                    add_unresolved(raw, step.step_id, step.rune, "mirror.read input references non-input runtime value")
+                else:
+                    add_static(raw, step.step_id, step.rune)
+        if step.rune == "seal.assert_path_exists":
+            raw = step.args.get("path")
+            if isinstance(raw, str) and raw.startswith("$"):
+                add_unresolved(raw, step.step_id, step.rune, "path is computed dynamically at runtime")
+            elif isinstance(raw, str):
+                add_static(raw, step.step_id, step.rune)
+
+    return {
+        "declared_static": declared_static,
+        "declared_dynamic": declared_dynamic,
+        "unresolved_dynamic": unresolved_dynamic,
+        "summary": {
+            "declared_static": len(declared_static),
+            "declared_dynamic": len(declared_dynamic),
+            "unresolved_dynamic": len(unresolved_dynamic),
+            "unresolved_dynamic_present": bool(unresolved_dynamic),
+        },
+    }
+
+
 def extract_output_schema_paths(spell: "Spell") -> List[Path]:
     out: List[Path] = []
     for step in list(spell.graph) + list(spell.rollback):
@@ -155,9 +206,12 @@ def compute_spell_fingerprints(spell: "Spell", policy_path: Path, repo_root: Opt
         resolved = (spell.source_path.parent / schema_path).resolve() if not schema_path.is_absolute() else schema_path.resolve()
         files.append(file_digest_entry(resolved, repo_root=repo_root, role="schema:output"))
 
+    input_manifest = classify_input_manifest(spell)
     input_files: List[Dict[str, Any]] = []
-    for raw in extract_declared_input_paths(spell):
-        resolved = (spell.source_path.parent / raw).resolve() if not raw.is_absolute() else raw.resolve()
+    for item in input_manifest["declared_static"]:
+        spec = str(item["spec"])
+        path = Path(spec[7:]) if spec.startswith("file://") else Path(spec)
+        resolved = (spell.source_path.parent / path).resolve() if not path.is_absolute() else path.resolve()
         input_files.append(file_digest_entry(resolved, repo_root=repo_root, role="input"))
 
     required = {
@@ -171,7 +225,8 @@ def compute_spell_fingerprints(spell: "Spell", policy_path: Path, repo_root: Opt
         "files": files,
         "input_manifest": {
             "files": input_files,
-            "sha256": sha256_bytes(canonical_json(input_files).encode("utf-8")),
+            "classification": input_manifest,
+            "sha256": sha256_bytes(canonical_json({"files": input_files, "classification": input_manifest}).encode("utf-8")),
         },
     }
 
@@ -295,7 +350,7 @@ def file_digest_entry(path: Path, repo_root: Optional[Path] = None, role: Option
     rel = None
     if repo_root is not None:
         try:
-            rel = str(resolved.relative_to(repo_root.resolve()))
+            rel = resolved.relative_to(repo_root.resolve()).as_posix()
         except Exception:
             rel = None
     return {
@@ -358,7 +413,8 @@ def normalize_proof(proof: Dict[str, Any], default_validator: str = "", default_
         "status": str(proof.get("status") or "unknown"),
         "message": str(proof.get("message") or ""),
         "evidence": proof.get("evidence"),
-        "timestamp": str(proof.get("timestamp") or utc_now()),
+        # Proof timestamps are optional; do not auto-inject wall-clock time.
+        "timestamp": str(proof["timestamp"]) if "timestamp" in proof and proof["timestamp"] is not None else None,
     }
 
 
@@ -881,6 +937,7 @@ def build_approval_manifest(
     write_steps: List[Dict[str, Any]],
     external_calls: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
+    input_classification = classify_input_manifest(resolved.spell)
     return {
         "spell": resolved.spell.name,
         "spellbook": {
@@ -895,6 +952,7 @@ def build_approval_manifest(
         "required_approvals": required_approvals,
         "write_steps": write_steps,
         "external_calls": external_calls,
+        "input_manifest": input_classification["summary"],
         "simulate_recommendation": bool(required_approvals or external_calls or write_steps),
         "ordered_steps": [
             {
@@ -1299,6 +1357,15 @@ def compare_reviewed_bundle(reviewed: Dict[str, Any], current: Dict[str, Any]) -
     for key in sorted(set(reviewed_sb) | set(current_sb)):
         diff(f"fingerprints.spellbook.required.{key}", reviewed_sb.get(key), current_sb.get(key), "required")
 
+    reviewed_unresolved = (
+        (((reviewed.get("fingerprints") or {}).get("input_manifest") or {}).get("classification") or {}).get("summary") or {}
+    ).get("unresolved_dynamic_present", False)
+    current_unresolved = (
+        (((current.get("fingerprints") or {}).get("input_manifest") or {}).get("classification") or {}).get("summary") or {}
+    ).get("unresolved_dynamic_present", False)
+    # Unresolved inputs degrade portability/contract strength; treat as allowlisted => partial.
+    diff("fingerprints.input_manifest.classification.summary.unresolved_dynamic_present", reviewed_unresolved, current_unresolved, "allowlisted")
+
     required_mismatch = any(item["severity"] == "required" for item in diffs)
     allowlisted_mismatch = any(item["severity"] == "allowlisted" for item in diffs)
     status = "mismatch" if required_mismatch else "partial" if allowlisted_mismatch else "exact"
@@ -1308,7 +1375,23 @@ def compare_reviewed_bundle(reviewed: Dict[str, Any], current: Dict[str, Any]) -
 def compute_attestation(reviewed_bundle: Dict[str, Any], resolved: ResolvedRunTarget, approvals: Optional[Set[str]] = None) -> Dict[str, Any]:
     current_bundle = build_review_bundle(resolved, approvals=approvals or set())
     cmp = compare_reviewed_bundle(reviewed_bundle, current_bundle)
-    return {"status": cmp["status"], "diffs": cmp["diffs"]}
+    status = cmp["status"]
+    # Default policy hook: unresolved dynamic inputs => at most partial.
+    unresolved_present = (
+        (((current_bundle.get("fingerprints") or {}).get("input_manifest") or {}).get("classification") or {}).get("summary") or {}
+    ).get("unresolved_dynamic_present", False)
+    if unresolved_present and status == "exact":
+        status = "partial"
+        cmp["diffs"].append(
+            {
+                "path": "fingerprints.input_manifest.classification.summary.unresolved_dynamic_present",
+                "reviewed": None,
+                "current": True,
+                "severity": "allowlisted",
+                "note": "Unresolved dynamic inputs degrade portability; attestation downgraded to partial.",
+            }
+        )
+    return {"status": status, "diffs": cmp["diffs"]}
 
 
 def build_review_bundle(resolved: ResolvedRunTarget, approvals: Optional[Set[str]] = None) -> Dict[str, Any]:
@@ -1429,6 +1512,94 @@ def build_prov_document(ctx: RuneContext, plan: List[Step]) -> Dict[str, Any]:
     }
 
 
+def normalize_trace_for_diff(trace: Dict[str, Any]) -> Dict[str, Any]:
+    out = json.loads(canonical_json(trace))
+    for key in ["execution_id", "started_at", "ended_at"]:
+        out.pop(key, None)
+    for event in out.get("events", []) or []:
+        if isinstance(event, dict):
+            event.pop("started_at", None)
+            event.pop("ended_at", None)
+    for item in (out.get("proofs", {}) or {}).get("items", []) or []:
+        if isinstance(item, dict):
+            item.pop("timestamp", None)
+    out = normalize_paths_for_portability(out, repo_root=ROOT)
+    out["diff_canonical"] = True
+    return out
+
+
+def normalize_prov_for_diff(prov: Dict[str, Any]) -> Dict[str, Any]:
+    out = json.loads(canonical_json(prov))
+    # PROV in this runtime includes times derived from trace events; drop them for diff payloads.
+    for activity in (out.get("activity", {}) or {}).values():
+        if isinstance(activity, dict):
+            activity.pop("prov:startTime", None)
+            activity.pop("prov:endTime", None)
+    if isinstance(out.get("axiom:proofs"), dict):
+        for item in (out.get("axiom:proofs") or {}).get("items", []) or []:
+            if isinstance(item, dict):
+                item.pop("timestamp", None)
+    out = normalize_paths_for_portability(out, repo_root=ROOT)
+    out["diff_canonical"] = True
+    return out
+
+
+def normalize_proofs_for_diff(proofs: Dict[str, Any]) -> Dict[str, Any]:
+    out = json.loads(canonical_json(proofs))
+    for item in out.get("items", []) or []:
+        if isinstance(item, dict):
+            item.pop("timestamp", None)
+    out = normalize_paths_for_portability(out, repo_root=ROOT)
+    out["diff_canonical"] = True
+    return out
+
+
+def _looks_like_path(text: str) -> bool:
+    if not text:
+        return False
+    lower = text.lower()
+    if lower.startswith(("http://", "https://", "mcp://", "upload://")):
+        return False
+    if lower.startswith("file://"):
+        return True
+    # Windows absolute: C:\ or UNC \\server\share
+    if re.match(r"^[a-zA-Z]:[\\\\/]", text) or text.startswith("\\\\"):
+        return True
+    # POSIX absolute
+    if text.startswith("/"):
+        return True
+    return False
+
+
+def _portable_path_token(text: str, repo_root: Path) -> str:
+    raw = text
+    if raw.lower().startswith("file://"):
+        raw = raw[7:]
+    try:
+        p = Path(raw)
+    except Exception:
+        return "<opaque_path>"
+    try:
+        resolved = p.resolve()
+    except Exception:
+        return "<opaque_path>"
+    try:
+        rel = resolved.relative_to(repo_root.resolve()).as_posix()
+        return f"repo:{rel}"
+    except Exception:
+        return "<opaque_path>"
+
+
+def normalize_paths_for_portability(value: Any, repo_root: Path) -> Any:
+    if isinstance(value, str):
+        return _portable_path_token(value, repo_root) if _looks_like_path(value) else value
+    if isinstance(value, list):
+        return [normalize_paths_for_portability(item, repo_root) for item in value]
+    if isinstance(value, dict):
+        return {k: normalize_paths_for_portability(v, repo_root) for k, v in value.items()}
+    return value
+
+
 
 def build_scxml(spell: Spell, plan: List[Step]) -> str:
     lines = [
@@ -1449,11 +1620,17 @@ def build_scxml(spell: Spell, plan: List[Step]) -> str:
 
 
 def export_witnesses(ctx: RuneContext, plan: List[Step], trace: Dict[str, Any]) -> None:
-    # Canonical JSON makes witnesses stable for review/diff tooling.
-    ctx.write_text(ctx.artifact_dir / f"{ctx.spell.name}.trace.json", canonical_json(trace))
-    ctx.write_text(ctx.artifact_dir / f"{ctx.spell.name}.prov.json", canonical_json(build_prov_document(ctx, plan)))
+    prov = build_prov_document(ctx, plan)
+    proofs = build_proof_summary(ctx.proofs)
+    # Raw witnesses preserve wall-clock timing for debugging.
+    ctx.write_text(ctx.artifact_dir / f"{ctx.spell.name}.trace.raw.json", canonical_json(trace))
+    ctx.write_text(ctx.artifact_dir / f"{ctx.spell.name}.prov.raw.json", canonical_json(prov))
+    ctx.write_text(ctx.artifact_dir / f"{ctx.spell.name}.proofs.raw.json", canonical_json(proofs))
+    # Diffable witnesses omit nondeterministic fields.
+    ctx.write_text(ctx.artifact_dir / f"{ctx.spell.name}.trace.json", canonical_json(normalize_trace_for_diff(trace)))
+    ctx.write_text(ctx.artifact_dir / f"{ctx.spell.name}.prov.json", canonical_json(normalize_prov_for_diff(prov)))
     ctx.write_text(ctx.artifact_dir / f"{ctx.spell.name}.scxml", build_scxml(ctx.spell, plan))
-    ctx.write_text(ctx.artifact_dir / f"{ctx.spell.name}.proofs.json", canonical_json(build_proof_summary(ctx.proofs)))
+    ctx.write_text(ctx.artifact_dir / f"{ctx.spell.name}.proofs.json", canonical_json(normalize_proofs_for_diff(proofs)))
 
 
 

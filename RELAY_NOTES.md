@@ -1,12 +1,11 @@
-# Axiomurgy v0.7 relay notes
+# Axiomurgy v0.8 relay notes
 
 What this lap adds:
-- content fingerprints surfaced in describe/plan/execute outputs
-- review bundles (describe + lint + plan + approval manifest + fingerprints + environment metadata)
-- review bundle verification against current repo state
-- execution attestation against a reviewed bundle
-- canonical JSON witnesses (trace/prov/proofs) with nondeterministic fields marked
-- extended smoke coverage around review → verify → execute
+- diffable witnesses with path normalization (repo-relative POSIX) and redaction for opaque absolute paths
+- raw witness artifacts preserved for forensics (wall-clock times + machine-specific paths)
+- input manifests classify declared_static vs declared_dynamic vs unresolved_dynamic
+- unresolved_dynamic inputs downgrade attestation to `partial` by default
+- cross-platform smoke runner: `python scripts/smoke.py`
 
 Verified demos in this relay:
 - `python axiomurgy.py spellbooks/primer_codex --describe`

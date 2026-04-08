@@ -21,7 +21,10 @@ Axiomurgy treats AI magic as **permissioned causality**:
 
 ## Current repo truth
 
-This v0.7 relay adds:
+This v0.8 relay adds:
+- portable review contracts (diffable witnesses with path normalization + redaction)
+- unresolved dynamic input signaling in review bundles and attestation
+- a cross-platform smoke runner (`python scripts/smoke.py`)
 - content fingerprints surfaced in describe/plan/execute outputs
 - review bundles (describe + lint + plan + manifest + fingerprints + environment metadata)
 - review bundle verification against current repo state

@@ -1,8 +1,8 @@
-# Axiomurgy v0.7 target
+# Axiomurgy v0.8 target
 
 ## Working title
 
-**Fingerprints, review bundles, and diffable witnesses**
+**Portable review contracts**
 
 ## Why this should be next
 
@@ -97,10 +97,22 @@ A change is successful when all of the following are true:
 4. A review bundle can be generated and then verified during execution.
 5. Diff mode clearly reports changes in approvals, writes, or witness outcomes.
 
-## Next (v0.8 sketch)
+## Scope (v0.8)
 
-If v0.7 lands cleanly, v0.8 should focus on:
-- explicit review bundles as first-class artifacts (storage conventions, naming)
+### 1. Portable diffable witnesses
+
+Diffable `*.trace.json` / `*.prov.json` / `*.proofs.json` should normalize paths to repo-relative POSIX where possible, and redact otherwise. Raw `*.raw.json` artifacts remain forensic.
+
+### 2. Unresolved dynamic input honesty
+
+Review bundles and attestation should surface when dynamic inputs are not fully captured at preflight (`unresolved_dynamic`), and downgrade attestation to `partial` by default.
+
+### 3. Cross-platform smoke
+
+Add `python scripts/smoke.py` as the primary local relay check.
+
+## Next (v0.9 sketch)
+
 - stricter “reviewed execution required” flag for write-capable runs
 - structured diff tooling over manifests and witnesses
 
