@@ -46,6 +46,24 @@ This v1.2 relay adds:
 - mutation families (`enum`, `numeric`, `string`) with stable proposal ordering and `proposal_id`; legacy `mutation_targets` still supported (not combinable with `mutation_families` in one config)
 - optional `reject_on_noop`, `tie_break`, and per-revolution `score_before` / `score_after` / `accept_reject_reason`
 
+This v1.3 relay adds:
+- Ouroboros **proposal_plan** artifacts (`*.proposal_plan.json` / `*.proposal_plan.raw.json`): deterministic, review-aware preflight classification of proposals against optional reviewed capability envelopes and spell fingerprints
+- **preflight_skips** on cycle witnesses for proposals skipped before execution (clear envelope overreach only—otherwise `uncertain`)
+- stable ranking: admissible, then uncertain, then inadmissible; inadmissible proposals do not consume `flux_budget` / veil attempts
+
+This v1.4 relay adds:
+- **Effect-signature diversification** for Ouroboros: within each admissibility tier, proposals are ordered in deterministic round-robin by canonical effect signature (novel signatures before near-duplicate candidates at the same locus)
+- `proposal_plan` fields: `effect_signature`, `effect_signature_id`, `signature_rank`, `duplicate_of_signature`, `diversification_summary`; `proposal_plan_version` `1.4.0`
+- bounded mutation families `flag` and `path_choice` in cycle configs (allowlisted targets only)
+
+This v1.5 relay adds:
+- **Score-channel integrity** for Ouroboros `fixture_score`: mechanical comparison of the metric file path to resolved `gate.file_write` targets; **inadmissible** only on a **clear break** (baseline has a single aligned writer to the metric file; proposal has none; paths resolved); otherwise **uncertain**
+- `proposal_plan_version` `1.5.0`; `score_channel_contract`, `score_channel_summary`, per-proposal score-channel fields; cycle witnesses include score-channel blocks; optional `score_channel_sensitive_paths` and `block_score_channel_sensitive_mutations` on cycle configs
+
+This v1.6 relay adds:
+- Optional **`acceptance_contract`** on cycle configs: primary metric mode (`maximize` / `minimize`), `required_improvement` (defaults merge with legacy `stop_conditions.min_improvement` when the block is absent), **guardrails** on secondary fixture metrics, **`tie_breakers`**, and mechanical **`reject_if`** flags versus the last accepted proposal
+- Deterministic **`evaluate_acceptance_contract`** seal step (per-revolution **`seal_decision`** JSON), resolved **`acceptance_contract`** and **`acceptance_summary`** counters on cycle witnesses; backward-compatible defaults when `acceptance_contract` is omitted
+
 ## Non-negotiable invariants
 
 Do not remove or weaken these without updating docs, examples, and tests together:

@@ -122,7 +122,7 @@ python axiomurgy.py spellbooks/primer_codex --approve publish \
   --review-bundle-in spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.review_bundle.json
 ```
 
-## Ouroboros Chamber (v1.2, optional)
+## Ouroboros Chamber (v1.6, optional)
 
 Ouroboros Chamber is an **opt-in, bounded cyclic runner** for supervised iterative improvement.
 It does not replace normal execution; it runs only when `--cycle-config` is provided.
@@ -134,7 +134,15 @@ python axiomurgy.py examples/ouroboros_score_fixture.spell.json \
   --cycle-config path/to/cycle.json
 ```
 
-v1.2 adds selective **recall** snapshots (bounded recent successes/failures), explicit **mutation families** (`enum`, `numeric`, `string`) with deterministic **proposal_id** ordering, optional **reject_on_noop**, and richer cycle witnesses. Legacy v1.1 configs using `mutation_targets` / `choices` remain valid; do not mix `mutation_families` and `mutation_targets` in one file.
+v1.2 adds selective **recall** snapshots (bounded recent successes/failures), explicit **mutation families** (`enum`, `numeric`, `string`, `flag`, `path_choice`) with deterministic **proposal_id** ordering, optional **reject_on_noop**, and richer cycle witnesses. Legacy v1.1 configs using `mutation_targets` / `choices` remain valid; do not mix `mutation_families` and `mutation_targets` in one file.
+
+**v1.3** adds deterministic **preflight proposal planning**: before revolutions, the runtime classifies each proposal as `admissible`, `uncertain`, or clearly `inadmissible` against an optional reviewed capability envelope (no guessing—only provable envelope overreach is inadmissible). It emits `*.proposal_plan.json` and `*.proposal_plan.raw.json`, skips inadmissible proposals **before** veil execution (without consuming flux budget), and records skips in `preflight_skips` on the cycle witness.
+
+**v1.4** keeps that admissibility ordering, then **diversifies** within each tier using a stable mechanical **effect signature** (plan shape, predicted capabilities, mutation locus—not scalar candidate values). `proposal_plan` records include `effect_signature`, `effect_signature_id`, `signature_rank`, `duplicate_of_signature`, and a `diversification_summary`; the chamber consumes the same `ranked_proposals` list in diversified order.
+
+**v1.5** adds deterministic **score-channel integrity** for `fixture_score`: it compares the metric file path (`target_metric.path`) to statically resolved `gate.file_write` targets. Proposals that **clearly** disconnect writes from the metric file are `inadmissible` before execution; ambiguous cases stay `uncertain`. `proposal_plan` includes `score_channel_contract`, per-proposal score-channel fields, and `score_channel_summary`; cycle witnesses echo the contract and summary. Optional cycle keys `score_channel_sensitive_paths` and `block_score_channel_sensitive_mutations` allow explicit operator bans on mutating named paths.
+
+**v1.6** adds an optional **`acceptance_contract`** on cycle configs: explicit primary metric direction, `required_improvement` (defaults align with legacy `min_improvement` when the block is omitted), **guardrails** on additional fixture-score paths, ordered **tie-breakers**, and mechanical **`reject_if`** checks versus the last accepted proposal. Acceptance is decided by a deterministic **seal** evaluator; each revolution records a **`seal_decision`**, and witnesses include the resolved contract plus an **`acceptance_summary`** (accept/reject counters).
 
 Notes:
 - review bundles + attestation still apply when `--review-bundle-in` is provided

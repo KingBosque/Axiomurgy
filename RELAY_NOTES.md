@@ -14,6 +14,10 @@ What this lap adds:
 - cross-platform smoke runner: `python scripts/smoke.py`
 - Ouroboros Chamber (v1.1): optional cyclic runner (`--cycle-config`) with allowlisted mutations, deterministic scoring, rollback via shadow spells, and cycle witnesses
 - Ouroboros Chamber (v1.2): selective recall, mutation families (`enum` / `numeric` / `string`), deterministic proposals with `proposal_id`, richer cycle witnesses (`recall`, per-revolution recall snapshots)
+- Ouroboros Chamber (v1.3): optional deterministic preflight **proposal_plan** (review-aware envelope checks, fingerprint match, unresolved-input risk), `preflight_skips`, skip inadmissible proposals before veil without flux spend
+- Ouroboros Chamber (v1.4): **effect signatures** per proposal (mechanical plan/locus/capability shape), deterministic **diversified ranking** within admissibility tiers, `mutation_families` supports `flag` and `path_choice`
+- Ouroboros Chamber (v1.5): **score-channel integrity** — static comparison of `target_metric.path` to resolved `gate.file_write` destinations; **clear-break** disconnects are `inadmissible`; otherwise `uncertain`; optional `score_channel_sensitive_paths` / `block_score_channel_sensitive_mutations`
+- Ouroboros Chamber (v1.6): optional **`acceptance_contract`** (guardrails, tie-break chain, `reject_if` vs last accept), deterministic seal evaluation, per-revolution **`seal_decision`**, witness **`acceptance_summary`**
 
 Verified demos in this relay:
 - `python axiomurgy.py spellbooks/primer_codex --describe`

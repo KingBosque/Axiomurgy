@@ -22,7 +22,7 @@ import jsonschema
 import requests
 import yaml
 
-VERSION = "1.2.0"
+VERSION = "1.6.0"
 ROOT = Path(__file__).resolve().parent
 DEFAULT_POLICY_PATH = ROOT / "policies" / "default.policy.json"
 DEFAULT_SCHEMA_PATH = ROOT / "spell.schema.json"
@@ -359,6 +359,115 @@ def canonical_json(data: Any) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True)
 
 
+ACCEPTANCE_CONTRACT_KEYS = frozenset(
+    {"primary_metric", "required_improvement", "guardrails", "tie_breakers", "reject_if"}
+)
+ACCEPTANCE_TIE_BREAKERS = frozenset(
+    {
+        "lower_ordering_index",
+        "higher_ordering_index",
+        "lower_flux_attempts",
+        "prefer_admissibility",
+    }
+)
+
+
+def _parse_acceptance_contract(
+    raw: Any,
+    *,
+    min_improvement_default: float,
+    legacy_tie_break: str,
+) -> Dict[str, Any]:
+    """Resolved acceptance contract with defaults; backward-compatible when raw is None."""
+    legacy_tie_list = (
+        ["lower_ordering_index"]
+        if legacy_tie_break == "prefer_lower_ordering_index"
+        else ["higher_ordering_index"]
+    )
+    default_reject_if = {
+        "score_channel_worsens": False,
+        "admissibility_worsens": False,
+        "capability_envelope_worsens": False,
+    }
+    if raw is None:
+        return {
+            "primary_metric": "maximize",
+            "required_improvement": float(min_improvement_default),
+            "guardrails": [],
+            "tie_breakers": legacy_tie_list,
+            "reject_if": dict(default_reject_if),
+        }
+    if not isinstance(raw, dict):
+        raise SpellValidationError("cycle config acceptance_contract must be an object or omitted")
+    extra = set(raw.keys()) - ACCEPTANCE_CONTRACT_KEYS
+    if extra:
+        raise SpellValidationError(f"cycle config acceptance_contract has unknown keys: {sorted(extra)}")
+    pm = str(raw.get("primary_metric", "maximize"))
+    if pm not in ("maximize", "minimize"):
+        raise SpellValidationError("acceptance_contract.primary_metric must be 'maximize' or 'minimize'")
+    if "required_improvement" in raw:
+        ri = float(raw["required_improvement"])
+    else:
+        ri = float(min_improvement_default)
+    if ri < 0:
+        raise SpellValidationError("acceptance_contract.required_improvement must be non-negative")
+    grs = raw.get("guardrails", []) or []
+    if not isinstance(grs, list):
+        raise SpellValidationError("acceptance_contract.guardrails must be a list")
+    guardrails: List[Dict[str, Any]] = []
+    for i, g in enumerate(grs):
+        if not isinstance(g, dict):
+            raise SpellValidationError(f"acceptance_contract.guardrails[{i}] must be an object")
+        mp = g.get("metric_path")
+        if not isinstance(mp, str) or not mp:
+            raise SpellValidationError(f"acceptance_contract.guardrails[{i}].metric_path must be a non-empty string")
+        comp = str(g.get("comparator", ""))
+        if comp not in (">=", ">", "<=", "<", "=="):
+            raise SpellValidationError(f"acceptance_contract.guardrails[{i}].comparator must be one of >=, >, <=, <, ==")
+        src = str(g.get("baseline_source", ""))
+        if src not in ("initial_baseline", "best_so_far", "previous_accepted"):
+            raise SpellValidationError(
+                f"acceptance_contract.guardrails[{i}].baseline_source must be "
+                "initial_baseline, best_so_far, or previous_accepted"
+            )
+        g_extra = set(g.keys()) - {"metric_path", "comparator", "baseline_source"}
+        if g_extra:
+            raise SpellValidationError(f"acceptance_contract.guardrails[{i}] unknown keys: {sorted(g_extra)}")
+        guardrails.append({"metric_path": mp, "comparator": comp, "baseline_source": src})
+    tbr = raw.get("tie_breakers", None)
+    if tbr is None:
+        tie_breakers = list(legacy_tie_list)
+    else:
+        if not isinstance(tbr, list) or not tbr:
+            raise SpellValidationError("acceptance_contract.tie_breakers must be a non-empty list")
+        tie_breakers = []
+        for i, tok in enumerate(tbr):
+            s = str(tok)
+            if s not in ACCEPTANCE_TIE_BREAKERS:
+                raise SpellValidationError(
+                    f"acceptance_contract.tie_breakers[{i}] must be one of {sorted(ACCEPTANCE_TIE_BREAKERS)}"
+                )
+            tie_breakers.append(s)
+    rj = raw.get("reject_if", {}) or {}
+    if not isinstance(rj, dict):
+        raise SpellValidationError("acceptance_contract.reject_if must be an object")
+    rj_extra = set(rj.keys()) - set(default_reject_if.keys())
+    if rj_extra:
+        raise SpellValidationError(f"acceptance_contract.reject_if unknown keys: {sorted(rj_extra)}")
+    reject_if = {
+        "score_channel_worsens": bool(rj.get("score_channel_worsens", False)),
+        "admissibility_worsens": bool(rj.get("admissibility_worsens", False)),
+        "capability_envelope_worsens": bool(rj.get("capability_envelope_worsens", False)),
+    }
+    return {
+        "primary_metric": pm,
+        "required_improvement": ri,
+        "guardrails": guardrails,
+        "tie_breakers": tie_breakers,
+        "reject_if": reject_if,
+    }
+
+
 def load_cycle_config(path: Path) -> Dict[str, Any]:
     raw = load_json(path)
     if not isinstance(raw, dict):
@@ -409,8 +518,10 @@ def load_cycle_config(path: Path) -> Dict[str, Any]:
             if not isinstance(item, dict):
                 raise SpellValidationError("cycle config mutation_families entries must be objects")
             fam = item.get("family")
-            if fam not in ("enum", "numeric", "string"):
-                raise SpellValidationError("cycle config mutation_families[].family must be enum, numeric, or string")
+            if fam not in ("enum", "numeric", "string", "flag", "path_choice"):
+                raise SpellValidationError(
+                    "cycle config mutation_families[].family must be enum, numeric, string, flag, or path_choice"
+                )
             if not isinstance(item.get("path"), str) or not item["path"]:
                 raise SpellValidationError("cycle config mutation_families[].path must be a non-empty string")
             cands = item.get("candidates")
@@ -424,6 +535,14 @@ def load_cycle_config(path: Path) -> Dict[str, Any]:
                 for c in cands:
                     if not isinstance(c, str):
                         raise SpellValidationError("cycle config string family candidates must be strings")
+            elif fam == "flag":
+                for c in cands:
+                    if not isinstance(c, bool):
+                        raise SpellValidationError("cycle config flag family candidates must be booleans")
+            elif fam == "path_choice":
+                for c in cands:
+                    if not isinstance(c, str) or not c:
+                        raise SpellValidationError("cycle config path_choice family candidates must be non-empty strings")
     elif targets:
         for item in targets:
             if not isinstance(item, dict):
@@ -434,6 +553,18 @@ def load_cycle_config(path: Path) -> Dict[str, Any]:
                 raise SpellValidationError("cycle config mutation_targets[].choices must be a non-empty list")
     else:
         raise SpellValidationError("cycle config requires non-empty mutation_families or mutation_targets")
+
+    sens = raw.get("score_channel_sensitive_paths", []) or []
+    if not isinstance(sens, list) or not all(isinstance(x, str) for x in sens):
+        raise SpellValidationError("cycle config score_channel_sensitive_paths must be a list of strings")
+    block_sens = bool(raw.get("block_score_channel_sensitive_mutations", False))
+
+    min_imp = float(stop_conditions.get("min_improvement", 0.0))
+    acceptance_contract = _parse_acceptance_contract(
+        raw.get("acceptance_contract"),
+        min_improvement_default=min_imp,
+        legacy_tie_break=tie_break,
+    )
 
     return {
         "max_revolutions": max_rev,
@@ -453,9 +584,12 @@ def load_cycle_config(path: Path) -> Dict[str, Any]:
         "reject_on_noop": reject_on_noop,
         "stop_conditions": {
             "max_failures": int(stop_conditions.get("max_failures", max_rev)),
-            "min_improvement": float(stop_conditions.get("min_improvement", 0.0)),
+            "min_improvement": min_imp,
             "no_improve_for": int(stop_conditions.get("no_improve_for", plateau_window)),
         },
+        "score_channel_sensitive_paths": list(sens),
+        "block_score_channel_sensitive_mutations": block_sens,
+        "acceptance_contract": acceptance_contract,
     }
 
 
@@ -596,6 +730,844 @@ def _scores_equal(a: float, b: float) -> bool:
     return abs(a - b) <= 1e-12
 
 
+def _fixture_score_safe(artifact_dir: Path, metric_path: str) -> float:
+    try:
+        return _fixture_score(artifact_dir, metric_path)
+    except Exception:
+        return float("-inf")
+
+
+def _admissibility_rank(status: str) -> int:
+    return {"admissible": 0, "uncertain": 1, "inadmissible": 2}.get(status, 1)
+
+
+def _score_channel_rank(status: str) -> int:
+    return {"aligned": 0, "not_aligned": 1, "uncertain": 2}.get(status, 2)
+
+
+def _capability_envelope_rank(status: str) -> int:
+    return {"compatible": 0, "not_applicable": 1, "unknown": 2, "incompatible": 3}.get(status, 2)
+
+
+def _compare_floats(a: float, b: float, op: str) -> bool:
+    if op == ">=":
+        return a >= b
+    if op == ">":
+        return a > b
+    if op == "<=":
+        return a <= b
+    if op == "<":
+        return a < b
+    if op == "==":
+        return _scores_equal(a, b)
+    return False
+
+
+def _evaluate_guardrails(
+    artifact_dir: Path,
+    guardrails: List[Dict[str, Any]],
+    initial_metrics: Dict[str, float],
+    metrics_at_best: Dict[str, float],
+    metrics_at_last_accept: Dict[str, float],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any], bool]:
+    out: List[Dict[str, Any]] = []
+    ref_map: Dict[str, str] = {}
+    any_fail = False
+    baseline_used = {"primary": "best_so_far", "guardrails": ref_map}
+    for g in guardrails:
+        mp = str(g["metric_path"])
+        comp = str(g["comparator"])
+        src = str(g["baseline_source"])
+        cand = _fixture_score_safe(artifact_dir, mp)
+        if src == "initial_baseline":
+            base = initial_metrics.get(mp, float("-inf"))
+            ref_map[mp] = "initial_baseline"
+        elif src == "best_so_far":
+            base = metrics_at_best.get(mp, float("-inf"))
+            ref_map[mp] = "best_so_far"
+        else:
+            base = metrics_at_last_accept.get(mp, float("-inf"))
+            ref_map[mp] = "previous_accepted"
+        ok = _compare_floats(cand, base, comp)
+        if not ok:
+            any_fail = True
+        out.append(
+            {
+                "metric_path": mp,
+                "comparator": comp,
+                "baseline_source": src,
+                "candidate_value": cand,
+                "baseline_value": base,
+                "pass": ok,
+            }
+        )
+    return out, baseline_used, any_fail
+
+
+def evaluate_acceptance_contract(
+    *,
+    artifact_dir: Path,
+    contract: Dict[str, Any],
+    execution_succeeded: bool,
+    candidate_primary: float,
+    best_primary: float,
+    initial_metrics: Dict[str, float],
+    metrics_at_best: Dict[str, float],
+    metrics_at_last_accept: Dict[str, float],
+    rec: Dict[str, Any],
+    last_accepted_rec: Optional[Dict[str, Any]],
+    best_ordering_index: Optional[int],
+    candidate_ordering_index: int,
+    revolution: int,
+    last_accepted_revolution: Optional[int],
+) -> Dict[str, Any]:
+    """
+    Deterministic seal-stage acceptance (v1.6).
+    Order: execution failure → reject_if (vs last accepted) → primary strict improvement
+    (with guardrails) → equal-primary path with guardrails then tie_breakers.
+    """
+    pm_mode = str(contract.get("primary_metric", "maximize"))
+    req_imp = float(contract.get("required_improvement", 0.0))
+    guardrails = list(contract.get("guardrails") or [])
+    tie_breakers = list(contract.get("tie_breakers") or ["lower_ordering_index"])
+    reject_if = contract.get("reject_if") or {}
+
+    if not execution_succeeded:
+        return {
+            "decision": "reject",
+            "primary_metric_result": {
+                "mode": pm_mode,
+                "candidate": candidate_primary,
+                "reference": best_primary,
+                "reference_label": "best_so_far",
+                "passes_required_improvement": False,
+            },
+            "guardrail_results": [],
+            "reject_if_results": {},
+            "tie_break_results": [],
+            "baseline_reference_used": {"primary": "best_so_far", "guardrails": {}},
+            "reasons": ["execution_failed"],
+        }
+
+    reasons: List[str] = []
+    reject_if_results: Dict[str, Any] = {}
+    if last_accepted_rec is not None:
+        if reject_if.get("score_channel_worsens"):
+            prev = _score_channel_rank(str(last_accepted_rec.get("score_channel_status")))
+            cur = _score_channel_rank(str(rec.get("score_channel_status")))
+            worsens = cur > prev
+            reject_if_results["score_channel_worsens"] = {"triggered": worsens, "previous_rank": prev, "current_rank": cur}
+            if worsens:
+                reasons.append("reject_if:score_channel_worsens")
+        else:
+            reject_if_results["score_channel_worsens"] = {"triggered": False}
+        if reject_if.get("admissibility_worsens"):
+            prev = _admissibility_rank(str(last_accepted_rec.get("admissibility_status")))
+            cur = _admissibility_rank(str(rec.get("admissibility_status")))
+            worsens = cur > prev
+            reject_if_results["admissibility_worsens"] = {"triggered": worsens, "previous_rank": prev, "current_rank": cur}
+            if worsens:
+                reasons.append("reject_if:admissibility_worsens")
+        else:
+            reject_if_results["admissibility_worsens"] = {"triggered": False}
+        if reject_if.get("capability_envelope_worsens"):
+            prev = _capability_envelope_rank(str(last_accepted_rec.get("capability_envelope_compatibility")))
+            cur = _capability_envelope_rank(str(rec.get("capability_envelope_compatibility")))
+            worsens = cur > prev
+            reject_if_results["capability_envelope_worsens"] = {
+                "triggered": worsens,
+                "previous_rank": prev,
+                "current_rank": cur,
+            }
+            if worsens:
+                reasons.append("reject_if:capability_envelope_worsens")
+        else:
+            reject_if_results["capability_envelope_worsens"] = {"triggered": False}
+    else:
+        reject_if_results = {
+            "score_channel_worsens": {"triggered": False, "note": "no_previous_accept"},
+            "admissibility_worsens": {"triggered": False, "note": "no_previous_accept"},
+            "capability_envelope_worsens": {"triggered": False, "note": "no_previous_accept"},
+        }
+
+    if any(r.startswith("reject_if:") for r in reasons):
+        return {
+            "decision": "reject",
+            "primary_metric_result": {
+                "mode": pm_mode,
+                "candidate": candidate_primary,
+                "reference": best_primary,
+                "reference_label": "best_so_far",
+                "passes_required_improvement": False,
+            },
+            "guardrail_results": [],
+            "reject_if_results": reject_if_results,
+            "tie_break_results": [],
+            "baseline_reference_used": {"primary": "best_so_far", "guardrails": {}},
+            "reasons": reasons,
+        }
+
+    ref_primary = best_primary
+    passes_strict = False
+    if pm_mode == "maximize":
+        passes_strict = candidate_primary > ref_primary + req_imp
+    else:
+        if ref_primary == float("-inf"):
+            passes_strict = candidate_primary != float("-inf")
+        else:
+            passes_strict = candidate_primary < ref_primary - req_imp
+
+    primary_metric_result = {
+        "mode": pm_mode,
+        "candidate": candidate_primary,
+        "reference": ref_primary,
+        "reference_label": "best_so_far",
+        "passes_required_improvement": passes_strict,
+    }
+
+    equal_primary = _scores_equal(candidate_primary, ref_primary) or (
+        candidate_primary == float("-inf") and ref_primary == float("-inf")
+    )
+
+    if passes_strict:
+        gr_out, gr_baseline, gr_fail = _evaluate_guardrails(
+            artifact_dir, guardrails, initial_metrics, metrics_at_best, metrics_at_last_accept
+        )
+        if gr_fail:
+            return {
+                "decision": "reject",
+                "primary_metric_result": primary_metric_result,
+                "guardrail_results": gr_out,
+                "reject_if_results": reject_if_results,
+                "tie_break_results": [],
+                "baseline_reference_used": gr_baseline,
+                "reasons": ["contract_reject:guardrail"],
+            }
+        return {
+            "decision": "accept",
+            "primary_metric_result": primary_metric_result,
+            "guardrail_results": gr_out,
+            "reject_if_results": reject_if_results,
+            "tie_break_results": [],
+            "baseline_reference_used": gr_baseline,
+            "reasons": ["contract_accept:primary_strict"],
+        }
+
+    gr_out, gr_baseline, gr_fail = _evaluate_guardrails(
+        artifact_dir, guardrails, initial_metrics, metrics_at_best, metrics_at_last_accept
+    )
+    if gr_fail:
+        return {
+            "decision": "reject",
+            "primary_metric_result": primary_metric_result,
+            "guardrail_results": gr_out,
+            "reject_if_results": reject_if_results,
+            "tie_break_results": [],
+            "baseline_reference_used": gr_baseline,
+            "reasons": ["contract_reject:guardrail"],
+        }
+
+    if not equal_primary:
+        return {
+            "decision": "reject",
+            "primary_metric_result": primary_metric_result,
+            "guardrail_results": gr_out,
+            "reject_if_results": reject_if_results,
+            "tie_break_results": [],
+            "baseline_reference_used": gr_baseline,
+            "reasons": ["contract_reject:primary_not_improved"],
+        }
+
+    tie_break_results: List[Dict[str, Any]] = []
+    accept_tie = False
+    if best_ordering_index is None:
+        accept_tie = True
+        tie_break_results.append({"rule": "no_prior_best_ordering", "accept": True})
+    else:
+        for rule in tie_breakers:
+            tr: Dict[str, Any] = {"rule": rule, "accept": False}
+            if rule == "lower_ordering_index":
+                tr["accept"] = candidate_ordering_index < best_ordering_index
+            elif rule == "higher_ordering_index":
+                tr["accept"] = candidate_ordering_index > best_ordering_index
+            elif rule == "lower_flux_attempts":
+                if last_accepted_revolution is None:
+                    tr["accept"] = True
+                else:
+                    tr["accept"] = revolution < last_accepted_revolution
+            elif rule == "prefer_admissibility":
+                if last_accepted_rec is None:
+                    tr["accept"] = True
+                else:
+                    tr["accept"] = _admissibility_rank(str(rec.get("admissibility_status"))) < _admissibility_rank(
+                        str(last_accepted_rec.get("admissibility_status"))
+                    )
+            tie_break_results.append(tr)
+            if tr["accept"]:
+                accept_tie = True
+                break
+
+    if accept_tie:
+        return {
+            "decision": "accept",
+            "primary_metric_result": primary_metric_result,
+            "guardrail_results": gr_out,
+            "reject_if_results": reject_if_results,
+            "tie_break_results": tie_break_results,
+            "baseline_reference_used": gr_baseline,
+            "reasons": ["contract_accept:tie_break"],
+        }
+
+    return {
+        "decision": "reject",
+        "primary_metric_result": primary_metric_result,
+        "guardrail_results": gr_out,
+        "reject_if_results": reject_if_results,
+        "tie_break_results": tie_break_results,
+        "baseline_reference_used": gr_baseline,
+        "reasons": ["contract_reject:tie_break"],
+    }
+
+
+def _record_seal_acceptance_summary(summary: Dict[str, int], seal: Dict[str, Any]) -> None:
+    if seal.get("decision") == "accept":
+        summary["accepted_by_contract"] += 1
+        return
+    reasons = seal.get("reasons") or []
+    r0 = reasons[0] if reasons else ""
+    if r0 == "contract_reject:guardrail":
+        summary["rejected_by_guardrail"] += 1
+    elif r0 == "contract_reject:tie_break":
+        summary["rejected_by_tiebreak"] += 1
+    elif r0 == "reject_if:score_channel_worsens":
+        summary["rejected_by_score_channel"] += 1
+    elif r0.startswith("reject_if:"):
+        summary["rejected_by_reject_if_non_score"] += 1
+    else:
+        summary["rejected_by_contract"] += 1
+
+
+def _predicted_capability_kinds_for_spell(spell: Spell) -> List[str]:
+    plan = compile_plan(spell)
+    kinds: Set[str] = set()
+    for step in plan:
+        kinds |= capability_kinds_for_step(step)
+    return sorted(kinds)
+
+
+def _mutation_target_class(mutation_path: str) -> str:
+    if mutation_path.startswith("spell.inputs."):
+        return "inputs"
+    parts = mutation_path.split(".")
+    if len(parts) >= 5 and parts[0] == "spell" and parts[1] == "graph" and parts[3] == "args":
+        return "graph_args"
+    return "other"
+
+
+def _effect_signature_canonical(spell: Spell, mutation_path: str) -> Dict[str, Any]:
+    """Mechanical effect-signature: capabilities, plan shape, and mutation locus (not candidate values)."""
+    plan = compile_plan(spell)
+    predicted = _predicted_capability_kinds_for_spell(spell)
+    step_effects = sorted([[s.step_id, str(s.effect)] for s in plan])
+    step_runes = sorted([[s.step_id, str(s.rune)] for s in plan])
+    write_effect_step_count = sum(1 for s in plan if str(s.effect) == "write")
+    mt = _mutation_target_class(mutation_path)
+    parts = mutation_path.split(".")
+    mutation_input_key: Optional[str] = None
+    mutation_graph_step_id: Optional[str] = None
+    mutation_graph_arg_key: Optional[str] = None
+    if mt == "inputs" and len(parts) >= 3:
+        mutation_input_key = ".".join(parts[2:])
+    elif mt == "graph_args" and len(parts) >= 5:
+        mutation_graph_step_id = parts[2]
+        mutation_graph_arg_key = ".".join(parts[4:])
+    return {
+        "predicted_capabilities": predicted,
+        "step_effects": step_effects,
+        "step_runes": step_runes,
+        "write_effect_step_count": write_effect_step_count,
+        "mutation_target_class": mt,
+        "mutation_input_key": mutation_input_key,
+        "mutation_graph_step_id": mutation_graph_step_id,
+        "mutation_graph_arg_key": mutation_graph_arg_key,
+    }
+
+
+def _effect_signature_id(canonical: Dict[str, Any]) -> str:
+    return sha256_bytes(canonical_json(canonical).encode("utf-8"))
+
+
+def _round_robin_by_effect_signature(tier_records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Within a tier, interleave proposals so distinct effect signatures alternate before repeats (deterministic)."""
+    by_sig: Dict[str, List[Dict[str, Any]]] = {}
+    for r in sorted(tier_records, key=lambda x: int(x["ordering_index"])):
+        sid = str(r["effect_signature_id"])
+        by_sig.setdefault(sid, []).append(r)
+    sig_ids = sorted(
+        by_sig.keys(),
+        key=lambda s: min(int(x["ordering_index"]) for x in by_sig[s]),
+    )
+    out: List[Dict[str, Any]] = []
+    while any(by_sig[s] for s in sig_ids):
+        for s in sig_ids:
+            if by_sig[s]:
+                out.append(by_sig[s].pop(0))
+    return out
+
+
+def _finalize_diversified_ranking(records: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    tiers = ["admissible", "uncertain", "inadmissible"]
+    ranked: List[Dict[str, Any]] = []
+    per_tier: Dict[str, Any] = {}
+    for status in tiers:
+        tier = [r for r in records if r["admissibility_status"] == status]
+        if not tier:
+            continue
+        rr = _round_robin_by_effect_signature(tier)
+        first_pid: Dict[str, str] = {}
+        sig_rank: Dict[str, int] = {}
+        next_rk = 0
+        for r in rr:
+            sid = str(r["effect_signature_id"])
+            if sid not in first_pid:
+                first_pid[sid] = str(r["proposal_id"])
+                sig_rank[sid] = next_rk
+                next_rk += 1
+                r["duplicate_of_signature"] = None
+            else:
+                r["duplicate_of_signature"] = first_pid[sid]
+            r["signature_rank"] = int(sig_rank[sid])
+        distinct = len({str(r["effect_signature_id"]) for r in tier})
+        per_tier[status] = {"proposals": len(tier), "distinct_effect_signatures": distinct}
+        ranked.extend(rr)
+    summary = {
+        "per_tier": per_tier,
+        "diversification_mode": "round_robin_by_effect_signature_within_admissibility_tier",
+    }
+    return ranked, summary
+
+
+def _maybe_path_for_spell(spell: Spell, raw: str) -> Path:
+    """Match RuneContext.maybe_path: absolute paths stay; relative resolve against spell source parent."""
+    path = Path(raw)
+    if path.is_absolute():
+        return path
+    return (spell.source_path.parent / path).resolve()
+
+
+def _resolve_gate_file_write_records(spell: Spell) -> List[Dict[str, Any]]:
+    """Static resolution of gate.file_write path args; compares to metric_abs via normalized strings."""
+    out: List[Dict[str, Any]] = []
+    for step in compile_plan(spell):
+        if step.rune != "gate.file_write":
+            continue
+        static_args = resolve_static_value(step.args, {"inputs": spell.inputs})
+        raw_path = static_args.get("path") if isinstance(static_args, dict) else None
+        rec: Dict[str, Any] = {
+            "step_id": step.step_id,
+            "effect": str(step.effect),
+            "rune": step.rune,
+            "resolved": False,
+            "resolved_path": None,
+            "path_resolution_reason": None,
+        }
+        if not isinstance(raw_path, str):
+            rec["path_resolution_reason"] = "path_not_a_string"
+            out.append(rec)
+            continue
+        if raw_path.startswith("$"):
+            rec["path_resolution_reason"] = "unresolved_path_reference"
+            out.append(rec)
+            continue
+        try:
+            abs_p = _maybe_path_for_spell(spell, raw_path).resolve()
+        except OSError:
+            rec["path_resolution_reason"] = "path_resolve_error"
+            out.append(rec)
+            continue
+        rec["resolved"] = True
+        rec["resolved_path"] = str(abs_p)
+        out.append(rec)
+    return out
+
+
+def _analyze_score_channel_for_shadow(
+    spell: Spell,
+    *,
+    metric_kind: str,
+    metric_rel: str,
+    metric_abs: Path,
+) -> Dict[str, Any]:
+    """
+    Mechanical score channel vs fixture_score metric file (metric_abs).
+    score_channel_status: aligned | not_aligned | uncertain
+    """
+    metric_abs_s = str(metric_abs.resolve())
+    records = _resolve_gate_file_write_records(spell)
+    writers: List[str] = []
+    unresolved_any = any(
+        not r["resolved"] for r in records
+    )
+    for r in records:
+        if r["resolved"] and r.get("resolved_path") == metric_abs_s:
+            writers.append(str(r["step_id"]))
+    writers = sorted(set(writers))
+
+    metric_source_step_id: Optional[str] = None
+    metric_source_effect: Optional[str] = None
+    if len(writers) == 1:
+        metric_source_step_id = writers[0]
+        for step in compile_plan(spell):
+            if step.step_id == metric_source_step_id:
+                metric_source_effect = str(step.effect)
+                break
+
+    reasons: List[str] = []
+    status: str
+    if not records:
+        status = "uncertain"
+        reasons.append("no_gate_file_write_steps")
+    elif unresolved_any:
+        status = "uncertain"
+        reasons.append("unresolved_write_path")
+    elif len(writers) == 1:
+        status = "aligned"
+        reasons.append("single_writer_to_metric_file")
+    elif len(writers) == 0:
+        status = "not_aligned"
+        reasons.append("no_writer_to_metric_file")
+    else:
+        status = "uncertain"
+        reasons.append("multiple_writers_to_metric_file")
+
+    return {
+        "metric_kind": metric_kind,
+        "metric_path": metric_rel,
+        "metric_abs": metric_abs_s,
+        "write_path_records": records,
+        "writers_to_metric": writers,
+        "metric_source_step_id": metric_source_step_id,
+        "metric_source_effect": metric_source_effect,
+        "score_channel_status": status,
+        "score_channel_reasons": reasons,
+    }
+
+
+def _baseline_shadow_for_ouroboros(base: Spell, metric_abs: str) -> Spell:
+    shadow = load_spell(base.source_path) if base.source_path.exists() else base
+    shadow.inputs = dict(base.inputs)
+    shadow.inputs["score_path"] = metric_abs
+    shadow.graph = [Step(**step.__dict__) for step in base.graph]
+    return shadow
+
+
+def _score_channel_clear_break(
+    baseline: Dict[str, Any],
+    proposal: Dict[str, Any],
+) -> Tuple[bool, List[str]]:
+    """
+    Inadmissible only when: baseline aligned, proposal has zero writers to metric,
+    and proposal has no unresolved gate.file_write path refs.
+    """
+    if baseline.get("score_channel_status") != "aligned":
+        return False, []
+    prop_records = proposal.get("write_path_records") or []
+    if any(not r.get("resolved") for r in prop_records):
+        return False, []
+    writers = proposal.get("writers_to_metric") or []
+    if len(writers) != 0:
+        return False, []
+    return True, ["score_channel_clear_break"]
+
+
+def _score_channel_diff_payload(
+    baseline: Dict[str, Any],
+    proposal: Dict[str, Any],
+    mutation_target: str,
+) -> Dict[str, Any]:
+    return {
+        "mutation_target": mutation_target,
+        "baseline_writers_to_metric": list(baseline.get("writers_to_metric") or []),
+        "proposal_writers_to_metric": list(proposal.get("writers_to_metric") or []),
+    }
+
+
+def _mutation_matches_score_channel_sensitive(mutation_path: str, patterns: List[str]) -> bool:
+    if not patterns:
+        return False
+    return any(fnmatch.fnmatch(mutation_path, pat) for pat in patterns)
+
+
+def _build_shadow_spell_for_ouroboros_proposal(
+    base: Spell,
+    *,
+    metric_abs: str,
+    mutation_path: str,
+    candidate: Any,
+    allowlist: List[str],
+) -> Spell:
+    shadow_spell = load_spell(base.source_path) if base.source_path.exists() else base
+    shadow_spell.inputs = dict(base.inputs)
+    shadow_spell.inputs["score_path"] = metric_abs
+    shadow_spell.graph = [Step(**step.__dict__) for step in base.graph]
+    _set_mutation(shadow_spell, mutation_path, candidate, allowlist)
+    return shadow_spell
+
+
+def _admissibility_status_rank(status: str) -> int:
+    return {"admissible": 0, "uncertain": 1, "inadmissible": 2}.get(status, 1)
+
+
+def plan_ouroboros_proposals(
+    resolved: ResolvedRunTarget,
+    *,
+    proposals: List[Dict[str, Any]],
+    allowlist: List[str],
+    metric_abs: str,
+    metric_rel: str,
+    reviewed_bundle: Optional[Dict[str, Any]],
+    enforce_review_bundle: bool,
+    score_channel_sensitive_paths: Optional[List[str]] = None,
+    block_score_channel_sensitive_mutations: bool = False,
+) -> Dict[str, Any]:
+    """
+    Deterministic pre-revolution admissibility planning (v1.5).
+    Does not execute steps; mirrors vessel overreach check at plan level.
+    Score-channel analysis ties fixture_score reads to gate.file_write targets at metric_abs.
+    Ranks proposals by admissibility tier, then diversifies by effect signature (round-robin).
+    """
+    base = resolved.spell
+    sens_paths = list(score_channel_sensitive_paths or [])
+    reviewed_kinds: Optional[Set[str]] = None
+    envelope_present = False
+    if reviewed_bundle is not None:
+        env = (reviewed_bundle.get("capabilities") or {}).get("envelope") or {}
+        kinds = env.get("kinds")
+        if isinstance(kinds, list):
+            envelope_present = True
+            reviewed_kinds = {str(k) for k in kinds}
+
+    fp_match = True
+    if reviewed_bundle is not None:
+        rf = (reviewed_bundle.get("fingerprints") or {}).get("required") or {}
+        cf = compute_spell_fingerprints(base, resolved.policy_path, repo_root=ROOT).get("required") or {}
+        rs = rf.get("spell_sha256")
+        cs = cf.get("spell_sha256")
+        if isinstance(rs, str) and isinstance(cs, str) and rs != cs:
+            fp_match = False
+        elif isinstance(rs, str) ^ isinstance(cs, str):
+            fp_match = False
+
+    metric_abs_path = Path(metric_abs).resolve()
+    baseline_spell = _baseline_shadow_for_ouroboros(base, metric_abs)
+    score_channel_contract = _analyze_score_channel_for_shadow(
+        baseline_spell,
+        metric_kind="fixture_score",
+        metric_rel=metric_rel,
+        metric_abs=metric_abs_path,
+    )
+
+    records: List[Dict[str, Any]] = []
+    for prop in proposals:
+        mutation_path = str(prop["path"])
+        choice = prop["candidate"]
+        family = str(prop["family"])
+        pid = str(prop["proposal_id"])
+        ord_idx = int(prop["ordering_index"])
+
+        shadow = _build_shadow_spell_for_ouroboros_proposal(
+            base,
+            metric_abs=metric_abs,
+            mutation_path=mutation_path,
+            candidate=choice,
+            allowlist=allowlist,
+        )
+        predicted = _predicted_capability_kinds_for_spell(shadow)
+        im = classify_input_manifest(shadow)
+        unresolved_risk = bool(im.get("summary", {}).get("unresolved_dynamic_present"))
+        unresolved_notes = [str(u.get("note", "")) for u in (im.get("unresolved_dynamic") or [])[:5]]
+
+        prev_val: Any
+        try:
+            pre_shadow = load_spell(base.source_path) if base.source_path.exists() else base
+            pre_shadow.inputs = dict(base.inputs)
+            pre_shadow.inputs["score_path"] = metric_abs
+            pre_shadow.graph = [Step(**step.__dict__) for step in base.graph]
+            prev_val = _get_mutation_value(pre_shadow, mutation_path)
+        except SpellValidationError:
+            prev_val = None
+        noop_detected = json.dumps(prev_val, sort_keys=True) == json.dumps(choice, sort_keys=True)
+
+        reasons: List[str] = []
+        review_bundle_compatibility = "not_applicable"
+        capability_envelope_compatibility = "not_applicable"
+        status = "admissible"
+
+        if reviewed_bundle is not None:
+            review_bundle_compatibility = "compatible" if fp_match else "unknown"
+            if not fp_match:
+                reasons.append("spell fingerprint does not match reviewed bundle required spell_sha256")
+                status = "uncertain"
+
+            if not envelope_present:
+                capability_envelope_compatibility = "unknown"
+                reasons.append("reviewed bundle has no capability envelope kinds")
+                if status != "inadmissible":
+                    status = "uncertain"
+            else:
+                assert reviewed_kinds is not None
+                overreach = sorted(set(predicted) - reviewed_kinds)
+                if overreach:
+                    capability_envelope_compatibility = "incompatible"
+                    status = "inadmissible"
+                    reasons.append(
+                        f"predicted capabilities not in reviewed envelope: {overreach}"
+                    )
+                else:
+                    capability_envelope_compatibility = "compatible"
+
+        if unresolved_risk and status != "inadmissible":
+            status = "uncertain"
+            if unresolved_notes:
+                reasons.append(f"unresolved dynamic inputs: {unresolved_notes[0]}")
+
+        if reviewed_bundle is None:
+            review_bundle_compatibility = "not_applicable"
+            capability_envelope_compatibility = "not_applicable"
+            if unresolved_risk:
+                status = "uncertain"
+                if unresolved_notes:
+                    reasons.append(f"unresolved dynamic inputs: {unresolved_notes[0]}")
+
+        effect_sig = _effect_signature_canonical(shadow, mutation_path)
+        effect_sig_id = _effect_signature_id(effect_sig)
+
+        proposal_sc = _analyze_score_channel_for_shadow(
+            shadow,
+            metric_kind="fixture_score",
+            metric_rel=metric_rel,
+            metric_abs=metric_abs_path,
+        )
+        cb, cb_codes = _score_channel_clear_break(score_channel_contract, proposal_sc)
+        sc_diff = _score_channel_diff_payload(score_channel_contract, proposal_sc, mutation_path)
+        if (
+            score_channel_contract.get("score_channel_status") == "aligned"
+            and proposal_sc.get("score_channel_status") == "aligned"
+        ):
+            sc_preserved: Optional[bool] = list(score_channel_contract.get("writers_to_metric") or []) == list(
+                proposal_sc.get("writers_to_metric") or []
+            )
+        else:
+            sc_preserved = None
+
+        sc_reasons = list(proposal_sc.get("score_channel_reasons") or [])
+        sc_clear_break = False
+        if block_score_channel_sensitive_mutations and _mutation_matches_score_channel_sensitive(
+            mutation_path, sens_paths
+        ):
+            if status != "inadmissible":
+                status = "inadmissible"
+                reasons.append("score_channel_sensitive_mutation_blocked")
+                sc_reasons.append("score_channel_sensitive_mutation_blocked")
+        elif cb:
+            sc_clear_break = True
+            if status != "inadmissible":
+                status = "inadmissible"
+                for c in cb_codes:
+                    reasons.append(c)
+                    sc_reasons.append(c)
+        elif proposal_sc.get("score_channel_status") == "uncertain" and status == "admissible":
+            status = "uncertain"
+            for x in sc_reasons:
+                reasons.append(f"score_channel:{x}")
+        elif proposal_sc.get("score_channel_status") == "not_aligned" and status == "admissible":
+            status = "uncertain"
+            reasons.append("score_channel:not_aligned_without_clear_break")
+            sc_reasons.append("not_aligned_without_clear_break")
+
+        rec = {
+            "proposal_id": pid,
+            "mutation_family": family,
+            "mutation_target": mutation_path,
+            "ordering_index": ord_idx,
+            "candidate": choice,
+            "admissibility_status": status,
+            "reasons": reasons,
+            "predicted_capabilities": predicted,
+            "review_bundle_compatibility": review_bundle_compatibility,
+            "capability_envelope_compatibility": capability_envelope_compatibility,
+            "unresolved_input_risk": unresolved_risk,
+            "noop_risk": noop_detected,
+            "reviewed_bundle_enforce": bool(enforce_review_bundle),
+            "effect_signature": effect_sig,
+            "effect_signature_id": effect_sig_id,
+            "score_channel_status": proposal_sc.get("score_channel_status"),
+            "score_channel_baseline_status": score_channel_contract.get("score_channel_status"),
+            "score_channel_diff": sc_diff,
+            "score_channel_preserved": sc_preserved,
+            "score_channel_reasons": sc_reasons,
+            "score_channel_clear_break": sc_clear_break,
+        }
+        records.append(rec)
+
+    ranked, diversification_summary = _finalize_diversified_ranking(records)
+    skipped_ids = sorted({str(r["proposal_id"]) for r in records if r["admissibility_status"] == "inadmissible"})
+    counts = {
+        "admissible": sum(1 for r in records if r["admissibility_status"] == "admissible"),
+        "uncertain": sum(1 for r in records if r["admissibility_status"] == "uncertain"),
+        "inadmissible": sum(1 for r in records if r["admissibility_status"] == "inadmissible"),
+    }
+    sc_by_status = {"aligned": 0, "uncertain": 0, "not_aligned": 0}
+    for r in records:
+        st = str(r.get("score_channel_status") or "")
+        if st in sc_by_status:
+            sc_by_status[st] += 1
+    score_channel_summary = {
+        "by_status": sc_by_status,
+        "clear_break_inadmissible": sum(1 for r in records if r.get("score_channel_clear_break")),
+        "sensitive_blocked": sum(
+            1 for r in records if "score_channel_sensitive_mutation_blocked" in (r.get("score_channel_reasons") or [])
+        ),
+    }
+    summary = {
+        "review_bundle_present": reviewed_bundle is not None,
+        "envelope_present": envelope_present,
+        "enforce_review_bundle": bool(enforce_review_bundle),
+        "fingerprint_match": fp_match,
+        **counts,
+    }
+    return {
+        "proposal_plan_version": "1.5.0",
+        "axiomurgy_version": VERSION,
+        "total_proposals": len(records),
+        "counts": counts,
+        "proposals": records,
+        "ranked_proposals": ranked,
+        "skipped_inadmissible_proposal_ids": skipped_ids,
+        "review_awareness_summary": summary,
+        "diversification_summary": diversification_summary,
+        "score_channel_contract": score_channel_contract,
+        "score_channel_summary": score_channel_summary,
+    }
+
+
+def write_ouroboros_proposal_plan(
+    artifact_dir: Path,
+    spell_name: str,
+    plan_doc: Dict[str, Any],
+) -> Tuple[Path, Path]:
+    raw_path = artifact_dir / f"{spell_name}.proposal_plan.raw.json"
+    diff_path = artifact_dir / f"{spell_name}.proposal_plan.json"
+    raw_path.write_text(canonical_json(plan_doc), encoding="utf-8")
+    diff_path.write_text(
+        canonical_json(
+            normalize_paths_for_portability(json.loads(canonical_json(plan_doc)), repo_root=ROOT)
+        ),
+        encoding="utf-8",
+    )
+    return diff_path, raw_path
+
+
 def ouroboros_chamber(
     resolved: ResolvedRunTarget,
     *,
@@ -616,9 +1588,8 @@ def ouroboros_chamber(
     recall_cfg = cfg["recall"]
     k_succ = recall_cfg["recent_k_successes"]
     k_fail = recall_cfg["recent_k_failures"]
-    tie_break = cfg["tie_break"]
     reject_on_noop = cfg["reject_on_noop"]
-    min_imp = float(stop["min_improvement"])
+    acc_contract = cfg["acceptance_contract"]
 
     proposals = expand_cycle_proposals(cfg)
     if not proposals:
@@ -671,6 +1642,44 @@ def ouroboros_chamber(
     best_score = baseline_score
     best_ordering_index = None
 
+    metric_paths_set: Set[str] = {metric_path}
+    for g in acc_contract.get("guardrails") or []:
+        metric_paths_set.add(str(g["metric_path"]))
+    initial_metrics: Dict[str, float] = {
+        p: _fixture_score_safe(resolved.artifact_dir, p) for p in sorted(metric_paths_set)
+    }
+    metrics_at_best: Dict[str, float] = dict(initial_metrics)
+    metrics_at_last_accept: Dict[str, float] = dict(initial_metrics)
+    last_accepted_rec: Optional[Dict[str, Any]] = None
+    last_accepted_revolution: Optional[int] = None
+    acceptance_summary: Dict[str, int] = {
+        "accepted_by_contract": 0,
+        "rejected_by_contract": 0,
+        "rejected_by_guardrail": 0,
+        "rejected_by_tiebreak": 0,
+        "rejected_by_score_channel": 0,
+        "rejected_by_reject_if_non_score": 0,
+    }
+
+    plan_doc = plan_ouroboros_proposals(
+        resolved,
+        proposals=proposals,
+        allowlist=allowlist,
+        metric_abs=metric_abs,
+        metric_rel=metric_path,
+        reviewed_bundle=reviewed_bundle,
+        enforce_review_bundle=enforce_review_bundle,
+        score_channel_sensitive_paths=cfg.get("score_channel_sensitive_paths") or [],
+        block_score_channel_sensitive_mutations=bool(cfg.get("block_score_channel_sensitive_mutations", False)),
+    )
+    proposal_plan_diff_path, proposal_plan_raw_path = write_ouroboros_proposal_plan(
+        resolved.artifact_dir,
+        resolved.spell.name,
+        plan_doc,
+    )
+    ranked_list: List[Dict[str, Any]] = list(plan_doc["ranked_proposals"])
+    preflight_skips: List[Dict[str, Any]] = []
+
     stop_reason = None
     prop_idx = 0
     revolution = 0
@@ -686,25 +1695,50 @@ def ouroboros_chamber(
             stop_reason = "plateau"
             break
 
-        # Next proposal: linear scan only (no wrap). Skip proposal_ids rejected earlier in this run.
-        n_props = len(proposals)
+        # Linear scan over ranked proposals (v1.4 diversified order): skip rejected_ids and inadmissible preflight.
+        n_props = len(ranked_list)
         if n_props == 0:
             stop_reason = "exhausted_candidates"
             break
-        while prop_idx < n_props and proposals[prop_idx]["proposal_id"] in rejected_ids:
-            prop_idx += 1
+        while prop_idx < n_props:
+            rec = ranked_list[prop_idx]
+            pid = str(rec["proposal_id"])
+            if pid in rejected_ids:
+                prop_idx += 1
+                continue
+            if rec.get("admissibility_status") == "inadmissible":
+                skip_reason = "inadmissible_preflight"
+                if rec.get("score_channel_clear_break"):
+                    skip_reason = "score_channel_clear_break"
+                elif "score_channel_sensitive_mutation_blocked" in (rec.get("reasons") or []):
+                    skip_reason = "score_channel_sensitive_blocked"
+                preflight_skips.append(
+                    {
+                        "proposal_id": pid,
+                        "mutation_family": rec.get("mutation_family"),
+                        "mutation_target": rec.get("mutation_target"),
+                        "skip_reason": skip_reason,
+                        "admissibility_status": "inadmissible",
+                        "reasons": list(rec.get("reasons") or []),
+                        "score_channel_clear_break": bool(rec.get("score_channel_clear_break")),
+                        "score_channel_status": rec.get("score_channel_status"),
+                    }
+                )
+                prop_idx += 1
+                continue
+            break
         if prop_idx >= n_props:
             stop_reason = "exhausted_candidates"
             break
 
-        prop = proposals[prop_idx]
+        rec = ranked_list[prop_idx]
         prop_idx += 1
         revolution += 1
-        mutation_path = prop["path"]
-        choice = prop["candidate"]
-        family = prop["family"]
-        pid = prop["proposal_id"]
-        ord_idx = prop["ordering_index"]
+        mutation_path = str(rec["mutation_target"])
+        choice = rec["candidate"]
+        family = str(rec["mutation_family"])
+        pid = str(rec["proposal_id"])
+        ord_idx = int(rec["ordering_index"])
 
         recall_snapshot = _ouroboros_recall_snapshot(
             recent_successes=recent_successes,
@@ -775,6 +1809,7 @@ def ouroboros_chamber(
                         "proof_path": None,
                         "capability_denials": None,
                     },
+                    "seal_decision": None,
                 }
             )
             continue
@@ -831,26 +1866,29 @@ def ouroboros_chamber(
         else:
             score = float("-inf")
 
-        improved_strict = score > best_score + min_imp
-        improved_tie = False
-        if not improved_strict and _scores_equal(score, best_score) and best_ordering_index is not None:
-            if tie_break == "prefer_higher_ordering_index" and ord_idx > best_ordering_index:
-                improved_tie = True
-            elif tie_break == "prefer_lower_ordering_index" and ord_idx < best_ordering_index:
-                improved_tie = True
-
-        improved = improved_strict or improved_tie
-        accepted = bool(improved)
-        accept_reject_reason = "regression"
+        exec_ok = exec_result.get("status") == "succeeded"
+        seal = evaluate_acceptance_contract(
+            artifact_dir=resolved.artifact_dir,
+            contract=acc_contract,
+            execution_succeeded=exec_ok,
+            candidate_primary=score,
+            best_primary=best_score,
+            initial_metrics=initial_metrics,
+            metrics_at_best=metrics_at_best,
+            metrics_at_last_accept=metrics_at_last_accept,
+            rec=rec,
+            last_accepted_rec=last_accepted_rec,
+            best_ordering_index=best_ordering_index,
+            candidate_ordering_index=ord_idx,
+            revolution=revolution,
+            last_accepted_revolution=last_accepted_revolution,
+        )
+        _record_seal_acceptance_summary(acceptance_summary, seal)
+        accepted = seal.get("decision") == "accept"
+        accept_reject_reason = (seal.get("reasons") or ["contract_unknown"])[0]
         if accepted and cfg["require_approval_for_accept"] and "accept" not in approvals:
             accepted = False
             accept_reject_reason = "approval_required"
-        elif accepted:
-            accept_reject_reason = "tie_break" if improved_tie and not improved_strict else "improved"
-        elif exec_result.get("status") != "succeeded":
-            accept_reject_reason = "execution_failed"
-        else:
-            accept_reject_reason = "regression"
 
         if accepted:
             best_score = score
@@ -858,6 +1896,11 @@ def ouroboros_chamber(
             best_ordering_index = ord_idx
             no_improve = 0
             accepted_mutation_count += 1
+            snap_m = {p: _fixture_score_safe(resolved.artifact_dir, p) for p in metric_paths_set}
+            metrics_at_best = snap_m
+            metrics_at_last_accept = dict(snap_m)
+            last_accepted_rec = rec
+            last_accepted_revolution = revolution
             if k_succ > 0:
                 recent_successes.append(
                     {
@@ -913,6 +1956,7 @@ def ouroboros_chamber(
                     "proof_path": exec_result.get("proof_path"),
                     "capability_denials": exec_result.get("blocked"),
                 },
+                "seal_decision": seal,
             }
         )
 
@@ -940,6 +1984,14 @@ def ouroboros_chamber(
         "best_score": best_score,
         "recall": recall_final,
         "revolutions": revolutions,
+        "preflight_skips": preflight_skips,
+        "flux_attempts": attempted,
+        "proposal_plan_path": str(proposal_plan_diff_path),
+        "proposal_plan_raw_path": str(proposal_plan_raw_path),
+        "score_channel_contract": plan_doc.get("score_channel_contract"),
+        "score_channel_summary": plan_doc.get("score_channel_summary"),
+        "acceptance_contract": acc_contract,
+        "acceptance_summary": acceptance_summary,
         "nondeterministic_fields": [],
     }
     raw_path = resolved.artifact_dir / f"{resolved.spell.name}.ouroboros.raw.json"
@@ -954,6 +2006,11 @@ def ouroboros_chamber(
         "best_score": best_score,
         "ouroboros_witness_path": str(diff_path),
         "ouroboros_witness_raw_path": str(raw_path),
+        "proposal_plan_path": str(proposal_plan_diff_path),
+        "proposal_plan_raw_path": str(proposal_plan_raw_path),
+        "flux_attempts": attempted,
+        "acceptance_contract": acc_contract,
+        "acceptance_summary": acceptance_summary,
     }
 
 def sha256_bytes(data: bytes) -> str:

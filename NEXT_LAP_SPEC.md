@@ -1,6 +1,6 @@
 # Axiomurgy v1.1 target
 
-**Status:** Ouroboros v1.2 (selective recall + mutation families) is implemented in the reference runtime; see `README.md` and `examples/cycles/ouroboros_cycle_v12.json` for the current shape.
+**Status:** Ouroboros v1.6 (optional acceptance contracts + deterministic seal evaluation + witness summaries) is implemented in the reference runtime; see `README.md` (Ouroboros section) for the current shape.
 
 ## Working title
 

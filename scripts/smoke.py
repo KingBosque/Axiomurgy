@@ -130,6 +130,190 @@ def main() -> int:
     pids = [r.get("proposal_id") for r in witness_v12.get("revolutions", [])]
     assert len(pids) == len(set(pids))
 
+    # 2f) Ouroboros v1.3: proposal_plan artifacts, review-aware preflight, skip before veil when envelope forbids.
+    bundle_ouro = run_json(["examples/ouroboros_score_fixture.spell.json", "--review-bundle"])
+    full_bundle_path = Path(tempfile.gettempdir()) / "axiomurgy_review_bundle_ouroboros_full.json"
+    full_bundle_path.write_text(json.dumps(bundle_ouro, indent=2, ensure_ascii=False), encoding="utf-8")
+    cycle_v13_path = Path(tempfile.gettempdir()) / "axiomurgy_cycle_config_v13.json"
+    cycle_v13_path.write_text(
+        json.dumps(
+            {
+                "max_revolutions": 3,
+                "flux_budget": 3,
+                "plateau_window": 2,
+                "target_metric": {"kind": "fixture_score", "path": "ouroboros_score.json"},
+                "mutation_target_allowlist": ["spell.inputs.score"],
+                "mutation_targets": [{"path": "spell.inputs.score", "choices": [2.0, 0.0, 3.0]}],
+                "rollback_mode": "shadow_copy",
+                "stop_conditions": {"max_failures": 3, "min_improvement": 0.0, "no_improve_for": 2},
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    res_v13_ok = run_json(
+        [
+            "examples/ouroboros_score_fixture.spell.json",
+            "--cycle-config",
+            str(cycle_v13_path),
+            "--review-bundle-in",
+            str(full_bundle_path),
+        ]
+    )
+    assert res_v13_ok.get("proposal_plan_path")
+    assert Path(res_v13_ok["proposal_plan_path"]).exists()
+    assert Path(res_v13_ok.get("proposal_plan_raw_path", "")).exists()
+    wit_ok = json.loads(Path(res_v13_ok["ouroboros_witness_path"]).read_text(encoding="utf-8"))
+    assert wit_ok.get("flux_attempts", 0) >= 1
+    plan_ok = json.loads(Path(res_v13_ok["proposal_plan_path"]).read_text(encoding="utf-8"))
+    assert plan_ok.get("counts", {}).get("admissible", 0) >= 1
+
+    shrunk = dict(bundle_ouro)
+    shrunk["capabilities"] = dict(shrunk.get("capabilities") or {})
+    shrunk["capabilities"]["envelope"] = dict((shrunk["capabilities"].get("envelope") or {}))
+    kinds = list(shrunk["capabilities"]["envelope"].get("kinds") or [])
+    shrunk["capabilities"]["envelope"]["kinds"] = [k for k in kinds if k != "filesystem.write"]
+    shrunk_path = Path(tempfile.gettempdir()) / "axiomurgy_review_bundle_ouroboros_shrunk.json"
+    shrunk_path.write_text(json.dumps(shrunk, indent=2, ensure_ascii=False), encoding="utf-8")
+    res_v13_skip = run_json(
+        [
+            "examples/ouroboros_score_fixture.spell.json",
+            "--cycle-config",
+            str(cycle_v13_path),
+            "--review-bundle-in",
+            str(shrunk_path),
+        ]
+    )
+    wit_skip = json.loads(Path(res_v13_skip["ouroboros_witness_path"]).read_text(encoding="utf-8"))
+    assert wit_skip.get("flux_attempts") == 0
+    assert wit_skip.get("preflight_skips")
+    assert len(wit_skip["preflight_skips"]) >= 1
+
+    # 2g) Ouroboros v1.4+: proposal_plan diversification (v12 spell: score + note preserves metric channel).
+    cycle_v14_path = Path(tempfile.gettempdir()) / "axiomurgy_cycle_config_v14.json"
+    cycle_v14_path.write_text(
+        json.dumps(
+            {
+                "max_revolutions": 2,
+                "flux_budget": 2,
+                "plateau_window": 2,
+                "target_metric": {"kind": "fixture_score", "path": "ouroboros_score.json"},
+                "mutation_target_allowlist": ["spell.inputs.score", "spell.inputs.note"],
+                "mutation_targets": [
+                    {"path": "spell.inputs.score", "choices": [1.0, 2.0]},
+                    {"path": "spell.inputs.note", "choices": ["a", "b"]},
+                ],
+                "rollback_mode": "shadow_copy",
+                "stop_conditions": {"max_failures": 2, "min_improvement": 0.0, "no_improve_for": 2},
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    res_v14 = run_json(
+        ["examples/ouroboros_score_fixture_v12.spell.json", "--cycle-config", str(cycle_v14_path)]
+    )
+    plan_v14 = json.loads(Path(res_v14["proposal_plan_path"]).read_text(encoding="utf-8"))
+    assert plan_v14.get("proposal_plan_version") == "1.5.0"
+    assert plan_v14.get("diversification_summary")
+    assert plan_v14.get("score_channel_contract", {}).get("score_channel_status") == "aligned"
+    assert plan_v14.get("score_channel_summary")
+    ranked_v14 = plan_v14.get("ranked_proposals") or []
+    adm_v14 = [r for r in ranked_v14 if r.get("admissibility_status") == "admissible"]
+    assert len({str(r["effect_signature_id"]) for r in adm_v14}) >= 2
+
+    # 2h) Ouroboros v1.5: score-channel clear-break preflight skip + preserved proposal executes.
+    cycle_v15_path = Path(tempfile.gettempdir()) / "axiomurgy_cycle_config_v15.json"
+    cycle_v15_path.write_text(
+        json.dumps(
+            {
+                "max_revolutions": 3,
+                "flux_budget": 3,
+                "plateau_window": 2,
+                "target_metric": {"kind": "fixture_score", "path": "ouroboros_score.json"},
+                "mutation_target_allowlist": ["spell.inputs.score", "spell.inputs.score_path"],
+                "mutation_targets": [
+                    {"path": "spell.inputs.score", "choices": [2.0]},
+                    {"path": "spell.inputs.score_path", "choices": ["artifacts/elsewhere.json"]},
+                ],
+                "rollback_mode": "shadow_copy",
+                "stop_conditions": {"max_failures": 3, "min_improvement": 0.0, "no_improve_for": 2},
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    res_v15 = run_json(["examples/ouroboros_score_fixture.spell.json", "--cycle-config", str(cycle_v15_path)])
+    plan_v15 = json.loads(Path(res_v15["proposal_plan_path"]).read_text(encoding="utf-8"))
+    assert plan_v15.get("proposal_plan_version") == "1.5.0"
+    assert plan_v15.get("score_channel_summary", {}).get("clear_break_inadmissible", 0) >= 1
+    wit_v15 = json.loads(Path(res_v15["ouroboros_witness_path"]).read_text(encoding="utf-8"))
+    assert wit_v15.get("score_channel_contract")
+    assert wit_v15.get("score_channel_summary")
+    skips = wit_v15.get("preflight_skips") or []
+    assert any(s.get("skip_reason") == "score_channel_clear_break" for s in skips)
+    assert wit_v15.get("flux_attempts", 0) >= 1
+
+    # 2i) Ouroboros v1.6: optional acceptance_contract, seal_decision, acceptance_summary.
+    assert "acceptance_contract" in witness and "acceptance_summary" in witness
+    cycle_v16_accept = Path(tempfile.gettempdir()) / "axiomurgy_cycle_config_v16_accept.json"
+    cycle_v16_accept.write_text(
+        json.dumps(
+            {
+                "max_revolutions": 2,
+                "flux_budget": 2,
+                "plateau_window": 2,
+                "target_metric": {"kind": "fixture_score", "path": "ouroboros_score.json"},
+                "mutation_target_allowlist": ["spell.inputs.score"],
+                "mutation_targets": [{"path": "spell.inputs.score", "choices": [2.0, 0.0]}],
+                "rollback_mode": "shadow_copy",
+                "stop_conditions": {"max_failures": 2, "min_improvement": 0.0, "no_improve_for": 2},
+                "acceptance_contract": {"tie_breakers": ["lower_ordering_index"]},
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    res_v16 = run_json(["examples/ouroboros_score_fixture.spell.json", "--cycle-config", str(cycle_v16_accept)])
+    wit_v16 = json.loads(Path(res_v16["ouroboros_witness_path"]).read_text(encoding="utf-8"))
+    assert wit_v16.get("acceptance_contract", {}).get("primary_metric") == "maximize"
+    assert "accepted_by_contract" in wit_v16.get("acceptance_summary", {})
+    assert any(r.get("seal_decision") for r in wit_v16.get("revolutions", []))
+    cycle_v16_guard = Path(tempfile.gettempdir()) / "axiomurgy_cycle_config_v16_guard.json"
+    cycle_v16_guard.write_text(
+        json.dumps(
+            {
+                "max_revolutions": 1,
+                "flux_budget": 1,
+                "plateau_window": 2,
+                "target_metric": {"kind": "fixture_score", "path": "ouroboros_score.json"},
+                "mutation_target_allowlist": ["spell.inputs.score"],
+                "mutation_targets": [{"path": "spell.inputs.score", "choices": [99.0]}],
+                "acceptance_contract": {
+                    "guardrails": [
+                        {
+                            "metric_path": "ouroboros_score.json",
+                            "comparator": "<=",
+                            "baseline_source": "initial_baseline",
+                        }
+                    ]
+                },
+                "rollback_mode": "shadow_copy",
+                "stop_conditions": {"max_failures": 1, "min_improvement": 0.0, "no_improve_for": 2},
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    res_v16g = run_json(["examples/ouroboros_score_fixture.spell.json", "--cycle-config", str(cycle_v16_guard)])
+    wit_v16g = json.loads(Path(res_v16g["ouroboros_witness_path"]).read_text(encoding="utf-8"))
+    assert wit_v16g.get("acceptance_summary", {}).get("rejected_by_guardrail", 0) >= 1
+
     # 3) Rollback demo (OpenAPI) + raw+diff artifacts
     with tempfile.TemporaryDirectory() as tmpdir:
         port = 8951
