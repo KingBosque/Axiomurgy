@@ -1,27 +1,24 @@
-# Axiomurgy v0.6
+# Axiomurgy v0.7
 
 Axiomurgy is a programmable magical system for AIs.
 
-This relay upgrades the runtime from **packaged execution with proofs** to a stronger **preflight workflow**:
+This relay upgrades the runtime from **preflight + approval manifests** to a stronger **reviewed execution workflow**:
 - describe a spell or spellbook entrypoint
 - lint it deterministically before execution
 - compile a dry plan without side effects
 - emit a machine-readable approval manifest for downstream agents and IDEs
+- generate a single review bundle (describe + lint + plan + fingerprints)
+- verify a review bundle against current repo state
+- attest an execution against a reviewed bundle
 
-## What changed in v0.6
+## What changed in v0.7
 
-- added `--describe` mode for resolved spell and spellbook entrypoints
-- added `--plan` mode for deterministic preflight execution summaries
-- added `--lint` mode for local spell and spellbook checks
-- added approval manifests that surface:
-  - required approvals
-  - planned writes
-  - external calls
-  - policy path
-  - artifact directory
-  - simulation recommendation
-- expanded tests and smoke coverage to verify describe → lint → plan → execute on the packaged spellbook
-- refreshed the Cursor handoff so agents can inspect the repo before they act
+- added content fingerprints surfaced in `--describe`, `--plan`, and execution results
+- added `--review-bundle` mode (describe + lint + plan + approval manifest + fingerprints + environment metadata)
+- added `--verify-review-bundle <bundle>` mode (exit nonzero on mismatch)
+- added execution attestation via `--review-bundle-in <bundle>`
+- made trace/prov/proofs JSON canonical (sorted keys) and explicitly marked nondeterministic fields
+- expanded tests and smoke coverage for review → verify → execute
 
 ## Core features
 
@@ -29,7 +26,7 @@ This relay upgrades the runtime from **packaged execution with proofs** to a str
 - JSON Schema spellbook validation
 - dependency-aware execution planning
 - deterministic linting for spells and spellbooks
-- plan summaries and approval manifests
+- plan summaries, approval manifests, and review bundles
 - policy checks and human approval gates
 - rollback and compensation semantics
 - PROV-like witness export and SCXML plan export
@@ -81,6 +78,20 @@ python axiomurgy.py spellbooks/primer_codex --plan \
   --manifest-out spellbooks/primer_codex/artifacts/primer_codex_publish_v0_6.approval_manifest.json
 ```
 
+Generate a review bundle:
+
+```bash
+python axiomurgy.py spellbooks/primer_codex --review-bundle \
+  > spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.review_bundle.json
+```
+
+Verify a review bundle:
+
+```bash
+python axiomurgy.py spellbooks/primer_codex --verify-review-bundle \
+  spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.review_bundle.json
+```
+
 Run the direct primer relay:
 
 ```bash
@@ -91,6 +102,13 @@ Run the packaged spellbook entrypoint:
 
 ```bash
 python axiomurgy.py spellbooks/primer_codex --approve publish
+```
+
+Run the packaged spellbook entrypoint *with attestation against a reviewed bundle*:
+
+```bash
+python axiomurgy.py spellbooks/primer_codex --approve publish \
+  --review-bundle-in spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.review_bundle.json
 ```
 
 Run the MCP relay:

@@ -21,7 +21,7 @@ import jsonschema
 import requests
 import yaml
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 ROOT = Path(__file__).resolve().parent
 DEFAULT_POLICY_PATH = ROOT / "policies" / "default.policy.json"
 DEFAULT_SCHEMA_PATH = ROOT / "spell.schema.json"
@@ -110,6 +110,92 @@ class ResolvedRunTarget:
     entrypoint: Optional[str] = None
 
 
+def extract_declared_input_paths(spell: "Spell") -> List[Path]:
+    paths: List[Path] = []
+    for step in list(spell.graph) + list(spell.rollback):
+        if step.rune == "mirror.read":
+            raw = step.args.get("input")
+            if isinstance(raw, list):
+                for item in raw:
+                    if isinstance(item, str) and not item.startswith("$"):
+                        paths.append(Path(item[7:]) if item.startswith("file://") else Path(item))
+            elif isinstance(raw, str) and not raw.startswith("$"):
+                paths.append(Path(raw[7:]) if raw.startswith("file://") else Path(raw))
+        if step.rune == "seal.assert_path_exists":
+            raw = step.args.get("path")
+            if isinstance(raw, str) and not raw.startswith("$"):
+                paths.append(Path(raw))
+    seen: Set[str] = set()
+    out: List[Path] = []
+    for p in paths:
+        key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+
+def extract_output_schema_paths(spell: "Spell") -> List[Path]:
+    out: List[Path] = []
+    for step in list(spell.graph) + list(spell.rollback):
+        if isinstance(step.output_schema, str) and step.output_schema:
+            out.append(Path(step.output_schema))
+    return out
+
+
+def compute_spell_fingerprints(spell: "Spell", policy_path: Path, repo_root: Optional[Path] = None) -> Dict[str, Any]:
+    repo_root = repo_root or ROOT
+    files: List[Dict[str, Any]] = []
+    files.append(file_digest_entry(spell.source_path, repo_root=repo_root, role="spell"))
+    files.append(file_digest_entry(policy_path, repo_root=repo_root, role="policy"))
+    files.append(file_digest_entry(DEFAULT_SCHEMA_PATH, repo_root=repo_root, role="schema:spell"))
+    files.append(file_digest_entry(DEFAULT_SPELLBOOK_SCHEMA_PATH, repo_root=repo_root, role="schema:spellbook"))
+    for schema_path in extract_output_schema_paths(spell):
+        resolved = (spell.source_path.parent / schema_path).resolve() if not schema_path.is_absolute() else schema_path.resolve()
+        files.append(file_digest_entry(resolved, repo_root=repo_root, role="schema:output"))
+
+    input_files: List[Dict[str, Any]] = []
+    for raw in extract_declared_input_paths(spell):
+        resolved = (spell.source_path.parent / raw).resolve() if not raw.is_absolute() else raw.resolve()
+        input_files.append(file_digest_entry(resolved, repo_root=repo_root, role="input"))
+
+    required = {
+        "spell_sha256": sha256_file(spell.source_path),
+        "policy_sha256": sha256_file(policy_path),
+        "spell_schema_sha256": sha256_file(DEFAULT_SCHEMA_PATH),
+        "spellbook_schema_sha256": sha256_file(DEFAULT_SPELLBOOK_SCHEMA_PATH),
+    }
+    return {
+        "required": required,
+        "files": files,
+        "input_manifest": {
+            "files": input_files,
+            "sha256": sha256_bytes(canonical_json(input_files).encode("utf-8")),
+        },
+    }
+
+
+def compute_spellbook_fingerprints(resolved: "ResolvedRunTarget", repo_root: Optional[Path] = None) -> Dict[str, Any]:
+    repo_root = repo_root or ROOT
+    if resolved.spellbook is None:
+        return {}
+    sb = resolved.spellbook
+    files: List[Dict[str, Any]] = []
+    files.append(file_digest_entry(sb.source_path, repo_root=repo_root, role="spellbook:manifest"))
+    files.append(file_digest_entry(resolved.spell.source_path, repo_root=repo_root, role="spellbook:entrypoint_spell"))
+    spellbook_dir = sb.source_path.parent
+    schemas_dir = (spellbook_dir / "schemas")
+    if schemas_dir.exists():
+        for schema_file in sorted(schemas_dir.glob("*.json")):
+            files.append(file_digest_entry(schema_file, repo_root=repo_root, role="spellbook:schema"))
+    required = {
+        "spellbook_manifest_sha256": sha256_file(sb.source_path),
+        "spellbook_entrypoint_spell_sha256": sha256_file(resolved.spell.source_path),
+    }
+    return {"required": required, "files": files}
+
+
 @dataclass
 class PolicyDecision:
     allowed: bool = True
@@ -195,6 +281,31 @@ def utc_now() -> str:
 def json_dumps(data: Any) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False)
 
+def canonical_json(data: Any) -> str:
+    return json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True)
+
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+def sha256_file(path: Path) -> str:
+    return sha256_bytes(path.read_bytes())
+
+def file_digest_entry(path: Path, repo_root: Optional[Path] = None, role: Optional[str] = None) -> Dict[str, Any]:
+    resolved = path.resolve()
+    rel = None
+    if repo_root is not None:
+        try:
+            rel = str(resolved.relative_to(repo_root.resolve()))
+        except Exception:
+            rel = None
+    return {
+        "role": role,
+        "path": str(resolved),
+        "repo_relpath": rel,
+        "size_bytes": resolved.stat().st_size if resolved.exists() else None,
+        "sha256": sha256_file(resolved) if resolved.exists() else None,
+    }
+
 
 def extract_references(value: Any) -> Set[str]:
     refs: Set[str] = set()
@@ -211,7 +322,18 @@ def extract_references(value: Any) -> Set[str]:
 
 
 def load_json(path: Path) -> Dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    raw = path.read_bytes()
+    if raw.startswith(b"\xef\xbb\xbf"):
+        text = raw.decode("utf-8-sig")
+    elif raw.startswith(b"\xff\xfe"):
+        text = raw.decode("utf-16")
+    elif raw.startswith(b"\xfe\xff"):
+        text = raw.decode("utf-16")
+    else:
+        text = raw.decode("utf-8")
+    if text.startswith("\ufeff"):
+        text = text.lstrip("\ufeff")
+    return json.loads(text)
 
 
 def load_yaml(path: Path) -> Dict[str, Any]:
@@ -283,6 +405,7 @@ def build_proof_summary(proofs: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         "other": other,
         "by_validator": dict(sorted(by_validator.items())),
         "items": items,
+        "nondeterministic_fields": ["items[].timestamp"],
     }
 
 
@@ -793,6 +916,10 @@ def build_plan_summary(
 ) -> Dict[str, Any]:
     approvals = approvals or set()
     policy = load_json(resolved.policy_path)
+    repo_root = ROOT
+    fingerprints = compute_spell_fingerprints(resolved.spell, resolved.policy_path, repo_root=repo_root)
+    if resolved.spellbook is not None:
+        fingerprints["spellbook"] = compute_spellbook_fingerprints(resolved, repo_root=repo_root)
     plan = compile_plan(resolved.spell)
     static_values = {"inputs": resolved.spell.inputs}
     step_rows: List[Dict[str, Any]] = []
@@ -867,6 +994,7 @@ def build_plan_summary(
         },
         "policy_path": str(resolved.policy_path),
         "artifact_dir": str(resolved.artifact_dir),
+        "fingerprints": fingerprints,
         "steps": step_rows,
         "write_steps": write_steps,
         "required_approvals": required_approvals,
@@ -885,6 +1013,10 @@ def build_plan_summary(
 
 
 def describe_target(resolved: ResolvedRunTarget) -> Dict[str, Any]:
+    repo_root = ROOT
+    fingerprints = compute_spell_fingerprints(resolved.spell, resolved.policy_path, repo_root=repo_root)
+    if resolved.spellbook is not None:
+        fingerprints["spellbook"] = compute_spellbook_fingerprints(resolved, repo_root=repo_root)
     description = {
         "mode": "describe",
         "kind": "spellbook" if resolved.spellbook is not None else "spell",
@@ -900,6 +1032,7 @@ def describe_target(resolved: ResolvedRunTarget) -> Dict[str, Any]:
         },
         "policy_path": str(resolved.policy_path),
         "artifact_dir": str(resolved.artifact_dir),
+        "fingerprints": fingerprints,
     }
     if resolved.spellbook is not None:
         description["spellbook"] = {
@@ -1123,6 +1256,82 @@ def lint_target(target: Path, policy_override: Optional[Path] = None) -> Dict[st
     return lint_spell_file(target, policy_path=policy_override)
 
 
+def environment_metadata() -> Dict[str, Any]:
+    py = sys.version.split()[0]
+    parts = py.split(".")
+    major_minor = ".".join(parts[:2]) if len(parts) >= 2 else py
+    return {
+        "axiomurgy_version": VERSION,
+        "mcp_protocol_version": MCP_PROTOCOL_VERSION,
+        "python": {"version": py, "major_minor": major_minor, "implementation": sys.implementation.name},
+        "platform": {"platform": sys.platform},
+        "witness_canonical_json": True,
+    }
+
+
+def compare_reviewed_bundle(reviewed: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
+    diffs: List[Dict[str, Any]] = []
+
+    def diff(path: str, reviewed_value: Any, current_value: Any, severity: str) -> None:
+        if reviewed_value == current_value:
+            return
+        diffs.append({"path": path, "reviewed": reviewed_value, "current": current_value, "severity": severity})
+
+    reviewed_env = reviewed.get("environment", {})
+    current_env = current.get("environment", {})
+    # Required environment: behavior-affecting and reproducibility-critical
+    for key in ["axiomurgy_version", "mcp_protocol_version", "witness_canonical_json"]:
+        diff(f"environment.{key}", reviewed_env.get(key), current_env.get(key), "required")
+    diff("environment.python.implementation", reviewed_env.get("python", {}).get("implementation"), current_env.get("python", {}).get("implementation"), "required")
+    diff("environment.python.major_minor", reviewed_env.get("python", {}).get("major_minor"), current_env.get("python", {}).get("major_minor"), "required")
+    diff("environment.platform.platform", reviewed_env.get("platform", {}).get("platform"), current_env.get("platform", {}).get("platform"), "required")
+    # Allowlisted noncritical: patch version changes
+    diff("environment.python.version", reviewed_env.get("python", {}).get("version"), current_env.get("python", {}).get("version"), "allowlisted")
+
+    reviewed_fps = (reviewed.get("fingerprints") or {}).get("required", {})
+    current_fps = (current.get("fingerprints") or {}).get("required", {})
+    for key in sorted(set(reviewed_fps) | set(current_fps)):
+        diff(f"fingerprints.required.{key}", reviewed_fps.get(key), current_fps.get(key), "required")
+
+    # Spellbook required fingerprints if present
+    reviewed_sb = (reviewed.get("fingerprints") or {}).get("spellbook", {}).get("required", {})
+    current_sb = (current.get("fingerprints") or {}).get("spellbook", {}).get("required", {})
+    for key in sorted(set(reviewed_sb) | set(current_sb)):
+        diff(f"fingerprints.spellbook.required.{key}", reviewed_sb.get(key), current_sb.get(key), "required")
+
+    required_mismatch = any(item["severity"] == "required" for item in diffs)
+    allowlisted_mismatch = any(item["severity"] == "allowlisted" for item in diffs)
+    status = "mismatch" if required_mismatch else "partial" if allowlisted_mismatch else "exact"
+    return {"status": status, "diffs": diffs, "reviewed": reviewed, "current": current}
+
+
+def compute_attestation(reviewed_bundle: Dict[str, Any], resolved: ResolvedRunTarget, approvals: Optional[Set[str]] = None) -> Dict[str, Any]:
+    current_bundle = build_review_bundle(resolved, approvals=approvals or set())
+    cmp = compare_reviewed_bundle(reviewed_bundle, current_bundle)
+    return {"status": cmp["status"], "diffs": cmp["diffs"]}
+
+
+def build_review_bundle(resolved: ResolvedRunTarget, approvals: Optional[Set[str]] = None) -> Dict[str, Any]:
+    approvals = approvals or set()
+    describe = describe_target(resolved)
+    lint = lint_target(resolved.spellbook.source_path.parent if resolved.spellbook is not None else resolved.spell.source_path)
+    plan = build_plan_summary(resolved, approvals=approvals, simulate=False)
+    return {
+        "bundle_version": "0.7",
+        "environment": environment_metadata(),
+        "target": {
+            "kind": "spellbook" if resolved.spellbook is not None else "spell",
+            "path": str(resolved.spellbook.source_path if resolved.spellbook is not None else resolved.spell.source_path),
+            "entrypoint": resolved.entrypoint,
+        },
+        "describe": describe,
+        "lint": lint,
+        "plan": plan,
+        "approval_manifest": plan.get("manifest"),
+        "fingerprints": plan.get("fingerprints"),
+    }
+
+
 def apply_output_schema(step: Step, value: Any, spell: Spell) -> None:
     if step.output_schema is not None:
         jsonschema.validate(instance=value, schema=load_schema(step.output_schema, spell.source_path.parent))
@@ -1240,10 +1449,11 @@ def build_scxml(spell: Spell, plan: List[Step]) -> str:
 
 
 def export_witnesses(ctx: RuneContext, plan: List[Step], trace: Dict[str, Any]) -> None:
-    ctx.write_json(ctx.artifact_dir / f"{ctx.spell.name}.trace.json", trace)
-    ctx.write_json(ctx.artifact_dir / f"{ctx.spell.name}.prov.json", build_prov_document(ctx, plan))
+    # Canonical JSON makes witnesses stable for review/diff tooling.
+    ctx.write_text(ctx.artifact_dir / f"{ctx.spell.name}.trace.json", canonical_json(trace))
+    ctx.write_text(ctx.artifact_dir / f"{ctx.spell.name}.prov.json", canonical_json(build_prov_document(ctx, plan)))
     ctx.write_text(ctx.artifact_dir / f"{ctx.spell.name}.scxml", build_scxml(ctx.spell, plan))
-    ctx.write_json(ctx.artifact_dir / f"{ctx.spell.name}.proofs.json", build_proof_summary(ctx.proofs))
+    ctx.write_text(ctx.artifact_dir / f"{ctx.spell.name}.proofs.json", canonical_json(build_proof_summary(ctx.proofs)))
 
 
 
@@ -1257,6 +1467,7 @@ def execute_spell(
 ) -> Dict[str, Any]:
     check_spell_capabilities(spell, capabilities)
     ctx = RuneContext(spell, capabilities, approvals, simulate, artifact_dir, load_json(policy_path))
+    fingerprints = compute_spell_fingerprints(spell, policy_path, repo_root=ROOT)
     plan = compile_plan(spell)
     rollback_map = {step.compensates: step for step in spell.rollback if step.compensates}
     started_at = utc_now()
@@ -1366,6 +1577,7 @@ def execute_spell(
         "inputs": spell.inputs,
         "error": error_message,
         "proofs": build_proof_summary(ctx.proofs),
+        "nondeterministic_fields": ["execution_id", "started_at", "ended_at", "proofs.items[].timestamp"],
     }
     if spell.witness.get("record", True):
         export_witnesses(ctx, plan, trace)
@@ -1381,6 +1593,7 @@ def execute_spell(
         "final": final_value,
         "final_confidence": final_meta.get("confidence"),
         "final_entropy": final_meta.get("entropy"),
+        "fingerprints": fingerprints,
         "trace_path": str(ctx.artifact_dir / f"{spell.name}.trace.json"),
         "prov_path": str(ctx.artifact_dir / f"{spell.name}.prov.json"),
         "scxml_path": str(ctx.artifact_dir / f"{spell.name}.scxml"),
@@ -1842,7 +2055,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     mode.add_argument("--describe", action="store_true", help="Describe the resolved spell or spellbook entrypoint without executing it")
     mode.add_argument("--plan", action="store_true", help="Compile a dry execution plan and approval manifest without executing side effects")
     mode.add_argument("--lint", action="store_true", help="Lint a spell or spellbook deterministically without executing it")
+    mode.add_argument("--review-bundle", action="store_true", help="Emit a single JSON review bundle (describe + lint + plan + fingerprints)")
+    mode.add_argument("--verify-review-bundle", default=None, help="Verify current state against a reviewed bundle JSON")
     parser.add_argument("--manifest-out", default=None, help="Optional path to write the approval manifest JSON when using --plan")
+    parser.add_argument("--review-bundle-in", default=None, help="Optional reviewed bundle JSON to attest execution against")
     return parser.parse_args(argv)
 
 
@@ -1853,8 +2069,8 @@ def main(argv: Sequence[str]) -> int:
     if not target.exists():
         print(f"ERROR: File not found: {target}")
         return 2
-    if args.manifest_out and not args.plan:
-        print("ERROR: --manifest-out can only be used with --plan")
+    if args.manifest_out and not (args.plan or args.review_bundle):
+        print("ERROR: --manifest-out can only be used with --plan or --review-bundle")
         return 2
     if args.simulate and (args.describe or args.plan or args.lint):
         print("ERROR: --simulate is only valid for execution mode")
@@ -1868,6 +2084,20 @@ def main(argv: Sequence[str]) -> int:
             resolved = resolve_run_target(target, args.entrypoint, policy_override, artifact_override)
             if args.describe:
                 result = describe_target(resolved)
+            elif args.verify_review_bundle:
+                reviewed = load_json(Path(args.verify_review_bundle).resolve())
+                current_bundle = build_review_bundle(resolved, approvals=set(args.approve))
+                cmp = compare_reviewed_bundle(reviewed, current_bundle)
+                result = {"mode": "verify", **cmp}
+                print(json_dumps(result))
+                return 0 if result["status"] in ("exact", "partial") else 3
+            elif args.review_bundle:
+                result = build_review_bundle(resolved, approvals=set(args.approve))
+                if args.manifest_out:
+                    manifest_path = Path(args.manifest_out).resolve()
+                    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                    manifest_path.write_text(json_dumps(result["approval_manifest"]), encoding="utf-8")
+                    result["manifest_path"] = str(manifest_path)
             elif args.plan:
                 result = build_plan_summary(resolved, approvals=set(args.approve), simulate=False)
                 if args.manifest_out:
@@ -1886,6 +2116,14 @@ def main(argv: Sequence[str]) -> int:
                     resolved.policy_path,
                     resolved.artifact_dir,
                 )
+                if args.review_bundle_in:
+                    reviewed = load_json(Path(args.review_bundle_in).resolve())
+                    result["attestation"] = {
+                        **compute_attestation(reviewed, resolved, approvals=set(args.approve)),
+                        "reviewed_bundle_path": str(Path(args.review_bundle_in).resolve()),
+                    }
+                else:
+                    result["attestation"] = {"status": "none", "diffs": [], "reviewed_bundle_path": None}
                 if resolved.spellbook is not None:
                     result["spellbook"] = {
                         "name": resolved.spellbook.name,

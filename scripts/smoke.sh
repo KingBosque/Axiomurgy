@@ -47,6 +47,18 @@ assert manifest['required_approvals'], manifest
 assert manifest['write_steps'], manifest
 PY
 
+python axiomurgy.py spellbooks/primer_codex --review-bundle >/tmp/axiomurgy_review_bundle_v07.json
+cp /tmp/axiomurgy_review_bundle_v07.json spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.review_bundle.json
+python axiomurgy.py spellbooks/primer_codex --verify-review-bundle /tmp/axiomurgy_review_bundle_v07.json >/tmp/axiomurgy_verify_v07.json
+cp /tmp/axiomurgy_verify_v07.json spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.verify.json
+python - <<'PY'
+import json
+from pathlib import Path
+verify = json.loads(Path('/tmp/axiomurgy_verify_v07.json').read_text())
+assert verify['mode'] == 'verify', verify
+assert verify['status'] in ('exact','partial'), verify
+PY
+
 python axiomurgy.py examples/primer_to_axioms.spell.json --approve publish >/tmp/axiomurgy_primer_run_v06.json
 python - <<'PY'
 import json
@@ -59,7 +71,7 @@ assert (root / 'artifacts' / 'primer_to_axioms_v0_6.md').exists()
 assert Path(run['proof_path']).exists()
 PY
 
-python axiomurgy.py spellbooks/primer_codex --approve publish >/tmp/axiomurgy_spellbook_run_v06.json
+python axiomurgy.py spellbooks/primer_codex --approve publish --review-bundle-in /tmp/axiomurgy_review_bundle_v07.json >/tmp/axiomurgy_spellbook_run_v06.json
 python - <<'PY'
 import json
 from pathlib import Path
@@ -70,6 +82,7 @@ assert run['proofs']['passed'] >= 4, run
 assert run['spellbook']['name'] == 'primer_codex', run
 assert (root / 'spellbooks' / 'primer_codex' / 'artifacts' / 'primer_codex_v0_6.md').exists()
 assert Path(run['proof_path']).exists()
+assert run.get('attestation', {}).get('status') in ('exact','partial'), run.get('attestation')
 PY
 
 python axiomurgy.py examples/primer_via_mcp.spell.json --approve stage >/tmp/axiomurgy_mcp_run_v06.json

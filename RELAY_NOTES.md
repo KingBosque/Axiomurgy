@@ -1,12 +1,12 @@
-# Axiomurgy v0.6 relay notes
+# Axiomurgy v0.7 relay notes
 
 What this lap adds:
-- `--describe` mode for resolved spell and spellbook entrypoints
-- `--lint` mode for deterministic local validation
-- `--plan` mode for dry execution summaries without side effects
-- approval manifests for downstream agents and IDEs
-- stronger smoke coverage around the full preflight chain
-- refreshed Cursor handoff docs and rules for preflight-first work
+- content fingerprints surfaced in describe/plan/execute outputs
+- review bundles (describe + lint + plan + approval manifest + fingerprints + environment metadata)
+- review bundle verification against current repo state
+- execution attestation against a reviewed bundle
+- canonical JSON witnesses (trace/prov/proofs) with nondeterministic fields marked
+- extended smoke coverage around review → verify → execute
 
 Verified demos in this relay:
 - `python axiomurgy.py spellbooks/primer_codex --describe`
@@ -28,6 +28,5 @@ Notable implementation choices:
 - execution semantics, rollback, and witnesses remain intact from earlier laps
 
 Suggested next relay:
-- stable fingerprints for spells, spellbooks, plans, and manifests
-- review bundles that can be approved once and verified at execution time
-- diff tooling for manifests and witness trails
+- stricter “reviewed execution required” flag for write-capable runs
+- structured diff tooling over manifests and witnesses

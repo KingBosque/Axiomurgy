@@ -54,9 +54,11 @@ Add a machine-readable bundle that captures:
 Suggested CLI shape:
 
 ```text
-python axiomurgy.py spellbooks/primer_codex --plan \
-  --manifest-out spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.approval_manifest.json \
-  --review-bundle-out spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.review_bundle.json
+python axiomurgy.py spellbooks/primer_codex --review-bundle \
+  > spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.review_bundle.json
+
+python axiomurgy.py spellbooks/primer_codex --verify-review-bundle \
+  spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.review_bundle.json
 ```
 
 ### 3. Execute against a reviewed bundle
@@ -67,7 +69,14 @@ Allow execution to consume a review bundle and verify that:
 - the current manifest fingerprint matches the reviewed one
 - the requested approvals are consistent with the reviewed grant set
 
-If verification fails, execution should stop before side effects.
+Suggested CLI shape:
+
+```text
+python axiomurgy.py spellbooks/primer_codex --approve publish \
+  --review-bundle-in spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.review_bundle.json
+```
+
+If verification fails, execution should stop before side effects (or at minimum surface `attestation.status: mismatch`).
 
 ### 4. Diffable witnesses
 
@@ -76,14 +85,7 @@ Add a comparison mode for:
 - two witness traces
 - two proof summaries
 
-Suggested CLI shape:
-
-```text
-python axiomurgy.py --diff manifest old.json new.json
-python axiomurgy.py --diff trace old.trace.json new.trace.json
-```
-
-Keep the diff deterministic and structured for agent consumption.
+Keep the witnesses deterministic and structured for agent consumption (canonical JSON, nondeterminism explicitly marked).
 
 ## Acceptance criteria
 
@@ -94,6 +96,13 @@ A change is successful when all of the following are true:
 3. Plan mode emits stable fingerprints.
 4. A review bundle can be generated and then verified during execution.
 5. Diff mode clearly reports changes in approvals, writes, or witness outcomes.
+
+## Next (v0.8 sketch)
+
+If v0.7 lands cleanly, v0.8 should focus on:
+- explicit review bundles as first-class artifacts (storage conventions, naming)
+- stricter “reviewed execution required” flag for write-capable runs
+- structured diff tooling over manifests and witnesses
 
 ## Non-goals
 

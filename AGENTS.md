@@ -21,12 +21,12 @@ Axiomurgy treats AI magic as **permissioned causality**:
 
 ## Current repo truth
 
-This v0.6 relay adds:
-- describe mode for resolved targets
-- deterministic linting for spells and spellbooks
-- plan mode for dry execution summaries
-- approval manifests for downstream agents and IDEs
-- expanded tests and smoke coverage across describe → lint → plan → execute
+This v0.7 relay adds:
+- content fingerprints surfaced in describe/plan/execute outputs
+- review bundles (describe + lint + plan + manifest + fingerprints + environment metadata)
+- review bundle verification against current repo state
+- execution attestation against a reviewed bundle
+- canonical JSON witnesses (trace/prov/proofs) with nondeterministic fields marked
 
 ## Non-negotiable invariants
 

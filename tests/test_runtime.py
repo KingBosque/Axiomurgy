@@ -88,6 +88,38 @@ class AxiomurgyRuntimeTests(unittest.TestCase):
         self.assertIn("unknown_rune", codes)
         self.assertIn("graph", codes)
 
+    def test_review_bundle_for_spellbook_contains_preflight_and_fingerprints(self):
+        resolved = self.runtime.resolve_run_target(ROOT / "spellbooks" / "primer_codex", None, None, None)
+        bundle = self.runtime.build_review_bundle(resolved)
+        self.assertEqual(bundle["bundle_version"], "0.7")
+        self.assertIn("environment", bundle)
+        self.assertIn("describe", bundle)
+        self.assertIn("lint", bundle)
+        self.assertIn("plan", bundle)
+        self.assertIn("approval_manifest", bundle)
+        self.assertIn("fingerprints", bundle)
+        self.assertIn("required", bundle["fingerprints"])
+
+    def test_verify_review_bundle_detects_spell_change(self):
+        base = ROOT / "examples" / "primer_to_axioms.spell.json"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_spell = Path(tmpdir) / "spell.spell.json"
+            tmp_spell.write_text(base.read_text(encoding="utf-8"), encoding="utf-8")
+            resolved = self.runtime.resolve_run_target(tmp_spell, None, None, None)
+            reviewed = self.runtime.build_review_bundle(resolved)
+            # Mutate content (behavior-affecting) and ensure mismatch is detected.
+            tmp_spell.write_text(tmp_spell.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+            resolved2 = self.runtime.resolve_run_target(tmp_spell, None, None, None)
+            current = self.runtime.build_review_bundle(resolved2)
+            cmp = self.runtime.compare_reviewed_bundle(reviewed, current)
+            self.assertEqual(cmp["status"], "mismatch", cmp)
+
+    def test_execute_attestation_exact_against_review_bundle(self):
+        resolved = self.runtime.resolve_run_target(ROOT / "spellbooks" / "primer_codex", None, None, None)
+        reviewed = self.runtime.build_review_bundle(resolved)
+        attestation = self.runtime.compute_attestation(reviewed, resolved, approvals={"publish"})
+        self.assertIn(attestation["status"], ("exact", "partial"))
+
     def test_direct_primer_spell_succeeds_and_emits_proofs(self):
         spell = self.runtime.load_spell(ROOT / "examples" / "primer_to_axioms.spell.json")
         with tempfile.TemporaryDirectory() as tmpdir:
