@@ -1,28 +1,33 @@
-# Axiomurgy v0.5 relay notes
-
-Windows note: spell-relative paths for `mirror.read` (including `file://`), MCP subprocess uses `sys.executable` for `python`/`python3`, `PYTHONIOENCODING=utf-8` for JSON-RPC over pipes, demo MCP server uses UTF-8 stdio and `axiomurgy_workspace/`, mock issue DB defaults to the repo root (`axiomurgy_mock_issues.json`). README quick start uses PowerShell.
+# Axiomurgy v0.6 relay notes
 
 What this lap adds:
-- spellbook manifests and `spellbook.schema.json`
-- runtime support for packaged spellbook entrypoints
-- deterministic validator runes
-- proof summaries in runtime results and witness files
-- a packaged `spellbooks/primer_codex/` example
-- expanded tests and smoke coverage for packaged execution
+- `--describe` mode for resolved spell and spellbook entrypoints
+- `--lint` mode for deterministic local validation
+- `--plan` mode for dry execution summaries without side effects
+- approval manifests for downstream agents and IDEs
+- stronger smoke coverage around the full preflight chain
+- refreshed Cursor handoff docs and rules for preflight-first work
 
 Verified demos in this relay:
-- `examples/primer_to_axioms.spell.json`
-- `examples/primer_via_mcp.spell.json`
-- `examples/openapi_ticket_then_fail.spell.json`
-- `spellbooks/primer_codex/`
+- `python axiomurgy.py spellbooks/primer_codex --describe`
+- `python axiomurgy.py spellbooks/primer_codex --lint`
+- `python axiomurgy.py spellbooks/primer_codex --plan`
+- `python axiomurgy.py examples/primer_to_axioms.spell.json --approve publish`
+- `python axiomurgy.py examples/primer_via_mcp.spell.json --approve stage`
+- `python axiomurgy.py examples/openapi_ticket_then_fail.spell.json --approve create_ticket`
 
 Why this lap exists:
-- direct spell files were useful, but they did not yet provide a clean packaging story
-- witness files existed, but there was no compact proof surface for downstream agents or IDEs
-- Cursor and other relay agents benefit from packaged entrypoints and deterministic preflight checks
+- packaged execution and proofs were useful, but downstream agents still lacked strong preflight visibility
+- another IDE or agent should be able to inspect a spellbook before running it
+- approvals and planned writes should be surfaced explicitly before side effects happen
+
+Notable implementation choices:
+- linting stays deterministic and local
+- plan mode does not execute spell steps
+- manifests summarize risk, approvals, writes, and external calls in a machine-readable form
+- execution semantics, rollback, and witnesses remain intact from earlier laps
 
 Suggested next relay:
-- plan mode for spells and spellbooks
-- deterministic linting
-- approval manifests
-- better preflight summaries for downstream agents and IDEs
+- stable fingerprints for spells, spellbooks, plans, and manifests
+- review bundles that can be approved once and verified at execution time
+- diff tooling for manifests and witness trails

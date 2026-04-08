@@ -1,5 +1,5 @@
 {
-  "spell": "primer_to_axioms_v0_5",
+  "spell": "primer_to_axioms_v0_6",
   "intent": "Read the bundled magic-system primers, synthesize recurring themes, and publish a relay-start artifact with deterministic validators.",
   "inputs": {
     "sources": [
@@ -86,7 +86,7 @@
       ],
       "args": {
         "from": "$brief",
-        "path": "../artifacts/primer_to_axioms_v0_5.md"
+        "path": "../artifacts/primer_to_axioms_v0_6.md"
       }
     }
   ],

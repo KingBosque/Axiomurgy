@@ -39,6 +39,55 @@ class AxiomurgyRuntimeTests(unittest.TestCase):
         self.assertEqual(resolved.entrypoint, "publish_codex")
         self.assertTrue(self.runtime.compile_plan(resolved.spell))
 
+    def test_describe_and_plan_spellbook_entrypoint_surface_approvals_and_writes(self):
+        resolved = self.runtime.resolve_run_target(ROOT / "spellbooks" / "primer_codex", None, None, None)
+        description = self.runtime.describe_target(resolved)
+        self.assertEqual(description["mode"], "describe")
+        self.assertEqual(description["spellbook"]["name"], "primer_codex")
+        self.assertEqual(description["spellbook"]["resolved_entrypoint"], "publish_codex")
+
+        plan = self.runtime.build_plan_summary(resolved)
+        self.assertEqual(plan["mode"], "plan")
+        self.assertTrue(plan["steps"])
+        self.assertTrue(plan["write_steps"])
+        self.assertTrue(plan["required_approvals"])
+        self.assertEqual(plan["manifest"]["policy_path"], str(resolved.policy_path))
+        self.assertEqual(plan["manifest"]["artifact_dir"], str(resolved.artifact_dir))
+        self.assertTrue(any(item["step_id"] == "publish" for item in plan["required_approvals"]))
+        self.assertTrue(any(item["step_id"] == "publish" for item in plan["write_steps"]))
+
+        granted_plan = self.runtime.build_plan_summary(resolved, approvals={"publish"})
+        publish_approval = next(item for item in granted_plan["required_approvals"] if item["step_id"] == "publish")
+        self.assertTrue(publish_approval["granted"])
+
+    def test_lint_spellbook_succeeds(self):
+        lint = self.runtime.lint_target(ROOT / "spellbooks" / "primer_codex")
+        self.assertTrue(lint["ok"], lint)
+        self.assertFalse(lint["errors"], lint)
+        self.assertIn("publish_codex", lint["entrypoints"])
+
+    def test_lint_catches_unknown_rune_and_broken_dependency(self):
+        bad_spell = {
+            "spell": "bad_spell",
+            "intent": "Exercise deterministic lint failures.",
+            "graph": [
+                {
+                    "id": "bad_step",
+                    "rune": "unknown.rune",
+                    "effect": "transform",
+                    "args": {"from": "$missing"},
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "bad.spell.json"
+            path.write_text(json.dumps(bad_spell, indent=2), encoding="utf-8")
+            lint = self.runtime.lint_target(path)
+        self.assertFalse(lint["ok"], lint)
+        codes = {item["code"] for item in lint["errors"]}
+        self.assertIn("unknown_rune", codes)
+        self.assertIn("graph", codes)
+
     def test_direct_primer_spell_succeeds_and_emits_proofs(self):
         spell = self.runtime.load_spell(ROOT / "examples" / "primer_to_axioms.spell.json")
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -70,7 +119,7 @@ class AxiomurgyRuntimeTests(unittest.TestCase):
         self.assertEqual(result["status"], "succeeded")
         self.assertGreaterEqual(result["proofs"]["passed"], 4)
         self.assertEqual(result["proofs"]["failed"], 0)
-        self.assertTrue((ROOT / "spellbooks" / "primer_codex" / "artifacts" / "primer_codex_v0_5.md").exists())
+        self.assertTrue((ROOT / "spellbooks" / "primer_codex" / "artifacts" / "primer_codex_v0_6.md").exists())
         self.assertTrue(Path(result["trace_path"]).exists())
         self.assertTrue(Path(result["prov_path"]).exists())
         self.assertTrue(Path(result["scxml_path"]).exists())

@@ -1,5 +1,5 @@
 {
-  "spell": "primer_codex_publish_v0_5",
+  "spell": "primer_codex_publish_v0_6",
   "intent": "Package the bundled magic-system primers into a codex artifact with deterministic proof-carrying witnesses.",
   "inputs": {
     "sources": [
@@ -28,7 +28,7 @@
       "id": "codex",
       "rune": "forge.summarize",
       "effect": "transform",
-      "args": {"from": "$gather", "title": "Axiomurgy Primer Codex v0.5"}
+      "args": {"from": "$gather", "title": "Axiomurgy Primer Codex v0.6"}
     },
     {
       "id": "validate_sections",
@@ -63,7 +63,7 @@
       "requires": ["validate_sections", "validate_markers"],
       "args": {
         "from": "$codex",
-        "path": "../artifacts/primer_codex_v0_5.md"
+        "path": "../artifacts/primer_codex_v0_6.md"
       }
     },
     {

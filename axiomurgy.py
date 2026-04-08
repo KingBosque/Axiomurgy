@@ -21,7 +21,7 @@ import jsonschema
 import requests
 import yaml
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 ROOT = Path(__file__).resolve().parent
 DEFAULT_POLICY_PATH = ROOT / "policies" / "default.policy.json"
 DEFAULT_SCHEMA_PATH = ROOT / "spell.schema.json"
@@ -402,17 +402,17 @@ class MCPClient:
         env = os.environ.copy()
         env.setdefault("PYTHONUNBUFFERED", "1")
         env.setdefault("PYTHONIOENCODING", "utf-8")
-        popen_kw: Dict[str, Any] = {
-            "stdin": subprocess.PIPE,
-            "stdout": subprocess.PIPE,
-            "stderr": subprocess.DEVNULL,
-            "text": True,
-            "encoding": "utf-8",
-            "errors": "replace",
-            "bufsize": 1,
-            "env": env,
-        }
-        self.proc = subprocess.Popen(self.cmd, **popen_kw)
+        self.proc = subprocess.Popen(
+            self.cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            env=env,
+        )
         self.request(
             "initialize",
             {
@@ -649,30 +649,478 @@ def rule_matches(step: Step, spell_risk: str, rule: Dict[str, Any]) -> bool:
 
 
 
-def evaluate_policy(ctx: RuneContext, step: Step) -> PolicyDecision:
-    spell_risk = str(ctx.spell.constraints.get("risk", "low"))
+def evaluate_policy_static(
+    spell: Spell,
+    policy: Dict[str, Any],
+    approvals: Set[str],
+    simulate: bool,
+    step: Step,
+) -> PolicyDecision:
+    spell_risk = str(spell.constraints.get("risk", "low"))
     decision = PolicyDecision()
-    for rule in ctx.policy.get("deny", []):
+    for rule in policy.get("deny", []):
         if rule_matches(step, spell_risk, rule):
             decision.allowed = False
             decision.approved = False
             decision.reasons.append(str(rule.get("reason", "Denied by policy.")))
-    if ctx.simulate and step.effect == "write":
+    if simulate and step.effect == "write":
         decision.simulated = True
         decision.requires_approval = False
         decision.approved = True
         decision.reasons.append("Simulate mode suppresses external write side effects.")
         return decision
-    if step.effect in set(ctx.spell.constraints.get("requires_approval_for", [])):
+    if step.effect in set(spell.constraints.get("requires_approval_for", [])):
         decision.requires_approval = True
         decision.reasons.append("Spell constraints require approval for this effect.")
-    for rule in ctx.policy.get("requires_approval", []):
+    for rule in policy.get("requires_approval", []):
         if rule_matches(step, spell_risk, rule):
             decision.requires_approval = True
             decision.reasons.append(str(rule.get("reason", "Approval required by policy.")))
-    decision.approved = (step.step_id in ctx.approvals or "all" in ctx.approvals) if decision.requires_approval else True
+    decision.approved = (step.step_id in approvals or "all" in approvals) if decision.requires_approval else True
     return decision
 
+
+
+def evaluate_policy(ctx: RuneContext, step: Step) -> PolicyDecision:
+    return evaluate_policy_static(ctx.spell, ctx.policy, ctx.approvals, ctx.simulate, step)
+
+
+
+def resolve_static_reference(key: str, values: Dict[str, Any]) -> Any:
+    parts = key.split(".")
+    current: Any = values[parts[0]]
+    for part in parts[1:]:
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+        elif isinstance(current, list) and part.isdigit() and int(part) < len(current):
+            current = current[int(part)]
+        else:
+            raise KeyError(f"Unknown static reference: ${key}")
+    return current
+
+
+
+def resolve_static_value(value: Any, values: Dict[str, Any]) -> Any:
+    if isinstance(value, str):
+        if value.startswith("$"):
+            try:
+                return resolve_static_reference(value[1:], values)
+            except KeyError:
+                return value
+        return value
+    if isinstance(value, list):
+        return [resolve_static_value(item, values) for item in value]
+    if isinstance(value, dict):
+        return {key: resolve_static_value(item, values) for key, item in value.items()}
+    return value
+
+
+
+def step_dependencies(step: Step) -> List[str]:
+    return sorted(set(step.requires) | {ref for ref in extract_references(step.args) if ref != "inputs"})
+
+
+
+def summarize_write_target(step: Step, static_args: Dict[str, Any]) -> Any:
+    if step.rune == "gate.file_write":
+        return static_args.get("path")
+    if step.rune == "gate.emit":
+        return static_args.get("target", "stdout")
+    if step.rune == "gate.openapi_call":
+        return {
+            "spec": static_args.get("spec"),
+            "operationId": static_args.get("operationId"),
+            "arguments": static_args.get("arguments", {}),
+        }
+    if step.rune == "gate.mcp_call_tool":
+        return {
+            "server_cmd": static_args.get("server_cmd"),
+            "tool": static_args.get("name"),
+            "arguments": static_args.get("arguments", {}),
+        }
+    return None
+
+
+
+def external_call_kind(step: Step) -> Optional[str]:
+    if step.rune == "gate.openapi_call":
+        return "openapi"
+    if step.rune == "gate.mcp_call_tool":
+        return "mcp"
+    return None
+
+
+
+def build_approval_manifest(
+    resolved: ResolvedRunTarget,
+    steps: List[Dict[str, Any]],
+    required_approvals: List[Dict[str, Any]],
+    write_steps: List[Dict[str, Any]],
+    external_calls: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    return {
+        "spell": resolved.spell.name,
+        "spellbook": {
+            "name": resolved.spellbook.name,
+            "version": resolved.spellbook.version,
+            "entrypoint": resolved.entrypoint,
+            "path": str(resolved.spellbook.source_path),
+        } if resolved.spellbook is not None else None,
+        "policy_path": str(resolved.policy_path),
+        "artifact_dir": str(resolved.artifact_dir),
+        "risk": str(resolved.spell.constraints.get("risk", "low")),
+        "required_approvals": required_approvals,
+        "write_steps": write_steps,
+        "external_calls": external_calls,
+        "simulate_recommendation": bool(required_approvals or external_calls or write_steps),
+        "ordered_steps": [
+            {
+                "index": item["index"],
+                "step_id": item["step_id"],
+                "rune": item["rune"],
+                "effect": item["effect"],
+            }
+            for item in steps
+        ],
+    }
+
+
+
+def build_plan_summary(
+    resolved: ResolvedRunTarget,
+    approvals: Optional[Set[str]] = None,
+    simulate: bool = False,
+) -> Dict[str, Any]:
+    approvals = approvals or set()
+    policy = load_json(resolved.policy_path)
+    plan = compile_plan(resolved.spell)
+    static_values = {"inputs": resolved.spell.inputs}
+    step_rows: List[Dict[str, Any]] = []
+    required_approvals: List[Dict[str, Any]] = []
+    write_steps: List[Dict[str, Any]] = []
+    external_calls: List[Dict[str, Any]] = []
+    for index, step in enumerate(plan, start=1):
+        static_args = resolve_static_value(step.args, static_values)
+        decision = evaluate_policy_static(resolved.spell, policy, approvals, simulate, step)
+        row = {
+            "index": index,
+            "step_id": step.step_id,
+            "rune": step.rune,
+            "effect": step.effect,
+            "description": step.description,
+            "depends_on": step_dependencies(step),
+            "references": sorted(extract_references(step.args)),
+            "args": static_args,
+            "policy": {
+                "allowed": decision.allowed,
+                "requires_approval": decision.requires_approval,
+                "approved": decision.approved,
+                "simulated": decision.simulated,
+                "reasons": decision.reasons,
+            },
+        }
+        target = summarize_write_target(step, static_args if isinstance(static_args, dict) else {})
+        if target is not None:
+            row["planned_target"] = target
+        step_rows.append(row)
+        if step.effect == "write":
+            write_entry = {
+                "step_id": step.step_id,
+                "rune": step.rune,
+                "effect": step.effect,
+                "target": target,
+                "requires_approval": decision.requires_approval,
+                "approved": decision.approved,
+            }
+            write_steps.append(write_entry)
+        kind = external_call_kind(step)
+        if kind is not None:
+            external_calls.append(
+                {
+                    "step_id": step.step_id,
+                    "kind": kind,
+                    "rune": step.rune,
+                    "target": target,
+                    "requires_approval": decision.requires_approval,
+                    "approved": decision.approved,
+                }
+            )
+        if decision.requires_approval:
+            required_approvals.append(
+                {
+                    "step_id": step.step_id,
+                    "rune": step.rune,
+                    "effect": step.effect,
+                    "reasons": decision.reasons,
+                    "granted": decision.approved,
+                }
+            )
+    manifest = build_approval_manifest(resolved, step_rows, required_approvals, write_steps, external_calls)
+    out = {
+        "mode": "plan",
+        "spell": {
+            "name": resolved.spell.name,
+            "intent": resolved.spell.intent,
+            "path": str(resolved.spell.source_path),
+            "risk": str(resolved.spell.constraints.get("risk", "low")),
+            "required_capabilities": list(resolved.spell.constraints.get("required_capabilities", [])),
+        },
+        "policy_path": str(resolved.policy_path),
+        "artifact_dir": str(resolved.artifact_dir),
+        "steps": step_rows,
+        "write_steps": write_steps,
+        "required_approvals": required_approvals,
+        "external_calls": external_calls,
+        "manifest": manifest,
+    }
+    if resolved.spellbook is not None:
+        out["spellbook"] = {
+            "name": resolved.spellbook.name,
+            "version": resolved.spellbook.version,
+            "entrypoint": resolved.entrypoint,
+            "path": str(resolved.spellbook.source_path),
+        }
+    return out
+
+
+
+def describe_target(resolved: ResolvedRunTarget) -> Dict[str, Any]:
+    description = {
+        "mode": "describe",
+        "kind": "spellbook" if resolved.spellbook is not None else "spell",
+        "target": str(resolved.spellbook.source_path if resolved.spellbook is not None else resolved.spell.source_path),
+        "spell": {
+            "name": resolved.spell.name,
+            "intent": resolved.spell.intent,
+            "path": str(resolved.spell.source_path),
+            "risk": str(resolved.spell.constraints.get("risk", "low")),
+            "required_capabilities": list(resolved.spell.constraints.get("required_capabilities", [])),
+            "required_approval_for": list(resolved.spell.constraints.get("requires_approval_for", [])),
+            "witness": resolved.spell.witness,
+        },
+        "policy_path": str(resolved.policy_path),
+        "artifact_dir": str(resolved.artifact_dir),
+    }
+    if resolved.spellbook is not None:
+        description["spellbook"] = {
+            "name": resolved.spellbook.name,
+            "version": resolved.spellbook.version,
+            "description": resolved.spellbook.description,
+            "path": str(resolved.spellbook.source_path),
+            "default_entrypoint": resolved.spellbook.default_entrypoint,
+            "resolved_entrypoint": resolved.entrypoint,
+            "required_capabilities": resolved.spellbook.required_capabilities,
+            "validators": resolved.spellbook.validators,
+            "entrypoints": resolved.spellbook.entrypoints,
+        }
+    return description
+
+
+
+def build_lint_issue(severity: str, code: str, message: str, path: str) -> Dict[str, Any]:
+    return {
+        "severity": severity,
+        "code": code,
+        "message": message,
+        "path": path,
+    }
+
+
+
+def iter_schema_issues(instance: Any, schema: Dict[str, Any], path_prefix: str) -> List[Dict[str, Any]]:
+    validator = jsonschema.Draft202012Validator(schema)
+    issues: List[Dict[str, Any]] = []
+    for error in sorted(validator.iter_errors(instance), key=lambda item: list(item.path)):
+        rendered_path = "/".join(str(part) for part in error.path)
+        full_path = path_prefix if not rendered_path else f"{path_prefix}/{rendered_path}"
+        issues.append(build_lint_issue("error", "schema", error.message, full_path))
+    return issues
+
+
+
+def lint_spell_file(
+    path: Path,
+    policy_path: Optional[Path] = None,
+    label: Optional[str] = None,
+) -> Dict[str, Any]:
+    errors: List[Dict[str, Any]] = []
+    warnings: List[Dict[str, Any]] = []
+    target_label = label or str(path)
+    try:
+        raw = load_json(path)
+    except json.JSONDecodeError as exc:
+        errors.append(build_lint_issue("error", "json", str(exc), target_label))
+        return {"target": target_label, "kind": "spell", "ok": False, "errors": errors, "warnings": warnings}
+    errors.extend(iter_schema_issues(raw, load_json(DEFAULT_SCHEMA_PATH), target_label))
+    if errors:
+        return {"target": target_label, "kind": "spell", "ok": False, "errors": errors, "warnings": warnings}
+    try:
+        spell = load_spell(path)
+    except Exception as exc:  # pragma: no cover - defensive fallback after schema checks
+        errors.append(build_lint_issue("error", "load_spell", str(exc), target_label))
+        return {"target": target_label, "kind": "spell", "ok": False, "errors": errors, "warnings": warnings}
+
+    graph_ids = [step.step_id for step in spell.graph]
+    rollback_ids = [step.step_id for step in spell.rollback]
+    for duplicate in sorted({item for item in graph_ids if graph_ids.count(item) > 1}):
+        errors.append(build_lint_issue("error", "duplicate_step_id", f"Duplicate graph step id: {duplicate}", f"{target_label}/graph"))
+    for duplicate in sorted({item for item in rollback_ids if rollback_ids.count(item) > 1}):
+        errors.append(build_lint_issue("error", "duplicate_rollback_step_id", f"Duplicate rollback step id: {duplicate}", f"{target_label}/rollback"))
+
+    all_graph_ids = {step.step_id for step in spell.graph}
+    for section_name, steps in (("graph", spell.graph), ("rollback", spell.rollback)):
+        for step in steps:
+            if step.rune not in REGISTRY._handlers:
+                errors.append(
+                    build_lint_issue(
+                        "error",
+                        "unknown_rune",
+                        f"Unknown rune '{step.rune}'",
+                        f"{target_label}/{section_name}/{step.step_id}",
+                    )
+                )
+            if isinstance(step.output_schema, str):
+                schema_path = (spell.source_path.parent / step.output_schema).resolve()
+                if not schema_path.exists():
+                    errors.append(
+                        build_lint_issue(
+                            "error",
+                            "missing_output_schema",
+                            f"Output schema path not found: {schema_path}",
+                            f"{target_label}/{section_name}/{step.step_id}/output_schema",
+                        )
+                    )
+            if section_name == "rollback" and step.compensates not in all_graph_ids:
+                errors.append(
+                    build_lint_issue(
+                        "error",
+                        "unknown_compensation_target",
+                        f"Rollback step compensates unknown graph step: {step.compensates}",
+                        f"{target_label}/{section_name}/{step.step_id}/compensates",
+                    )
+                )
+    try:
+        compile_plan(spell)
+    except SpellValidationError as exc:
+        errors.append(build_lint_issue("error", "graph", str(exc), f"{target_label}/graph"))
+
+    effective_policy_path = (policy_path or DEFAULT_POLICY_PATH).resolve()
+    policy = None
+    if effective_policy_path.exists():
+        try:
+            policy = load_json(effective_policy_path)
+        except Exception as exc:
+            errors.append(build_lint_issue("error", "policy_json", str(exc), f"{target_label}/policy"))
+    else:
+        errors.append(build_lint_issue("error", "missing_policy", f"Policy path not found: {effective_policy_path}", f"{target_label}/policy"))
+    if policy is not None:
+        for step in spell.graph:
+            if step.effect != "write":
+                continue
+            decision = evaluate_policy_static(spell, policy, set(), False, step)
+            if not decision.requires_approval:
+                warnings.append(
+                    build_lint_issue(
+                        "warning",
+                        "write_without_approval",
+                        f"Write step '{step.step_id}' is not gated by spell constraints or policy approvals.",
+                        f"{target_label}/graph/{step.step_id}",
+                    )
+                )
+
+    return {
+        "target": target_label,
+        "kind": "spell",
+        "ok": not errors,
+        "errors": errors,
+        "warnings": warnings,
+    }
+
+
+
+def lint_spellbook(path: Path, policy_override: Optional[Path] = None) -> Dict[str, Any]:
+    manifest_path = path / "spellbook.json" if path.is_dir() else path
+    target_label = str(manifest_path)
+    errors: List[Dict[str, Any]] = []
+    warnings: List[Dict[str, Any]] = []
+    try:
+        raw = load_json(manifest_path)
+    except json.JSONDecodeError as exc:
+        errors.append(build_lint_issue("error", "json", str(exc), target_label))
+        return {"target": target_label, "kind": "spellbook", "ok": False, "errors": errors, "warnings": warnings, "entrypoints": {}}
+    errors.extend(iter_schema_issues(raw, load_json(DEFAULT_SPELLBOOK_SCHEMA_PATH), target_label))
+    if errors:
+        return {"target": target_label, "kind": "spellbook", "ok": False, "errors": errors, "warnings": warnings, "entrypoints": {}}
+    spellbook = load_spellbook(manifest_path)
+    if spellbook.default_entrypoint and spellbook.default_entrypoint not in spellbook.entrypoints:
+        errors.append(
+            build_lint_issue(
+                "error",
+                "unknown_default_entrypoint",
+                f"default_entrypoint '{spellbook.default_entrypoint}' is not defined in entrypoints",
+                f"{target_label}/default_entrypoint",
+            )
+        )
+    if spellbook.default_policy:
+        policy_path = (spellbook.source_path.parent / spellbook.default_policy).resolve()
+        if not policy_path.exists():
+            errors.append(
+                build_lint_issue(
+                    "error",
+                    "missing_default_policy",
+                    f"Default policy path not found: {policy_path}",
+                    f"{target_label}/default_policy",
+                )
+            )
+    entry_results: Dict[str, Any] = {}
+    for name, entry in spellbook.entrypoints.items():
+        spell_path = (spellbook.source_path.parent / entry["spell"]).resolve()
+        if not spell_path.exists():
+            issue = build_lint_issue(
+                "error",
+                "missing_entrypoint_spell",
+                f"Entrypoint spell not found: {spell_path}",
+                f"{target_label}/entrypoints/{name}/spell",
+            )
+            errors.append(issue)
+            entry_results[name] = {"ok": False, "errors": [issue], "warnings": []}
+            continue
+        if entry.get("policy"):
+            entry_policy_path = (spellbook.source_path.parent / str(entry["policy"])).resolve()
+        elif spellbook.default_policy:
+            entry_policy_path = (spellbook.source_path.parent / spellbook.default_policy).resolve()
+        else:
+            entry_policy_path = policy_override.resolve() if policy_override else DEFAULT_POLICY_PATH.resolve()
+        if not entry_policy_path.exists():
+            errors.append(
+                build_lint_issue(
+                    "error",
+                    "missing_entrypoint_policy",
+                    f"Entrypoint policy path not found: {entry_policy_path}",
+                    f"{target_label}/entrypoints/{name}/policy",
+                )
+            )
+        entry_result = lint_spell_file(spell_path, policy_path=entry_policy_path, label=f"{target_label}::entrypoint:{name}")
+        entry_results[name] = entry_result
+        errors.extend(entry_result["errors"])
+        warnings.extend(entry_result["warnings"])
+    return {
+        "target": target_label,
+        "kind": "spellbook",
+        "ok": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "entrypoints": entry_results,
+    }
+
+
+
+def lint_target(target: Path, policy_override: Optional[Path] = None) -> Dict[str, Any]:
+    if target.is_dir() and (target / "spellbook.json").exists():
+        return lint_spellbook(target, policy_override=policy_override)
+    if target.name == "spellbook.json":
+        return lint_spellbook(target, policy_override=policy_override)
+    return lint_spell_file(target, policy_path=policy_override)
 
 
 def apply_output_schema(step: Step, value: Any, spell: Spell) -> None:
@@ -1382,7 +1830,7 @@ def rune_mcp_call_tool(ctx: RuneContext, step: Step, args: Dict[str, Any]) -> Ru
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run an Axiomurgy spell or spellbook entrypoint.")
+    parser = argparse.ArgumentParser(description="Run, inspect, plan, or lint an Axiomurgy spell or spellbook entrypoint.")
     parser.add_argument("target", help="Path to a .spell.json file, a spellbook directory, or spellbook.json")
     parser.add_argument("--entrypoint", default=None, help="Spellbook entrypoint name")
     parser.add_argument("--approve", action="append", default=[])
@@ -1390,6 +1838,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--artifact-dir", default=None)
     parser.add_argument("--simulate", action="store_true")
     parser.add_argument("--capability", action="append", default=[])
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--describe", action="store_true", help="Describe the resolved spell or spellbook entrypoint without executing it")
+    mode.add_argument("--plan", action="store_true", help="Compile a dry execution plan and approval manifest without executing side effects")
+    mode.add_argument("--lint", action="store_true", help="Lint a spell or spellbook deterministically without executing it")
+    parser.add_argument("--manifest-out", default=None, help="Optional path to write the approval manifest JSON when using --plan")
     return parser.parse_args(argv)
 
 
@@ -1400,30 +1853,46 @@ def main(argv: Sequence[str]) -> int:
     if not target.exists():
         print(f"ERROR: File not found: {target}")
         return 2
+    if args.manifest_out and not args.plan:
+        print("ERROR: --manifest-out can only be used with --plan")
+        return 2
+    if args.simulate and (args.describe or args.plan or args.lint):
+        print("ERROR: --simulate is only valid for execution mode")
+        return 2
     try:
-        resolved = resolve_run_target(
-            target,
-            args.entrypoint,
-            Path(args.policy).resolve() if args.policy else None,
-            Path(args.artifact_dir).resolve() if args.artifact_dir else None,
-        )
-        capabilities = {"read", "memory", "reason", "transform", "verify", "approve", "simulate", "write"}
-        capabilities.update(args.capability)
-        result = execute_spell(
-            resolved.spell,
-            sorted(capabilities),
-            set(args.approve),
-            bool(args.simulate),
-            resolved.policy_path,
-            resolved.artifact_dir,
-        )
-        if resolved.spellbook is not None:
-            result["spellbook"] = {
-                "name": resolved.spellbook.name,
-                "version": resolved.spellbook.version,
-                "entrypoint": resolved.entrypoint,
-                "path": str(resolved.spellbook.source_path),
-            }
+        policy_override = Path(args.policy).resolve() if args.policy else None
+        artifact_override = Path(args.artifact_dir).resolve() if args.artifact_dir else None
+        if args.lint:
+            result = lint_target(target, policy_override=policy_override)
+        else:
+            resolved = resolve_run_target(target, args.entrypoint, policy_override, artifact_override)
+            if args.describe:
+                result = describe_target(resolved)
+            elif args.plan:
+                result = build_plan_summary(resolved, approvals=set(args.approve), simulate=False)
+                if args.manifest_out:
+                    manifest_path = Path(args.manifest_out).resolve()
+                    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                    manifest_path.write_text(json_dumps(result["manifest"]), encoding="utf-8")
+                    result["manifest_path"] = str(manifest_path)
+            else:
+                capabilities = {"read", "memory", "reason", "transform", "verify", "approve", "simulate", "write"}
+                capabilities.update(args.capability)
+                result = execute_spell(
+                    resolved.spell,
+                    sorted(capabilities),
+                    set(args.approve),
+                    bool(args.simulate),
+                    resolved.policy_path,
+                    resolved.artifact_dir,
+                )
+                if resolved.spellbook is not None:
+                    result["spellbook"] = {
+                        "name": resolved.spellbook.name,
+                        "version": resolved.spellbook.version,
+                        "entrypoint": resolved.entrypoint,
+                        "path": str(resolved.spellbook.source_path),
+                    }
     except (AxiomurgyError, json.JSONDecodeError, FileNotFoundError, requests.RequestException, jsonschema.ValidationError) as exc:
         print(f"ERROR: {exc}")
         return 1

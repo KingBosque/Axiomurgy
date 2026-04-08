@@ -75,8 +75,8 @@ def handle_request(payload: Dict[str, Any]) -> Dict[str, Any] | None:
         return response(
             message_id,
             {
-                "protocolVersion": params.get("protocolVersion", "2025-06-18"),
-                "serverInfo": {"name": "axiomurgy-demo-mcp", "version": "0.5.0"},
+                "protocolVersion": params.get("protocolVersion", "2025-11-25"),
+                "serverInfo": {"name": "axiomurgy-demo-mcp", "version": "0.6.0"},
                 "capabilities": {"resources": {}, "tools": {}},
             },
         )

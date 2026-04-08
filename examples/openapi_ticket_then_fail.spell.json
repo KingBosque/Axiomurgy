@@ -1,5 +1,5 @@
 {
-  "spell": "openapi_ticket_then_fail_v0_5",
+  "spell": "openapi_ticket_then_fail_v0_6",
   "intent": "Create a local issue through OpenAPI and then fail intentionally to exercise rollback semantics.",
   "inputs": {
     "summary": "Implement richer rollback semantics for Axiomurgy gate steps and keep provenance attached to every compensation action."
@@ -36,7 +36,7 @@
         "operationId": "createTicket",
         "arguments": {
           "body": {
-            "title": "Axiomurgy v0.5 rollback milestone",
+            "title": "Axiomurgy v0.6 rollback milestone",
             "description": "$draft",
             "labels": [
               "relay",

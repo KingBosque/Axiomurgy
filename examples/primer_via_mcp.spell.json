@@ -1,5 +1,5 @@
 {
-  "spell": "primer_via_mcp_v0_5",
+  "spell": "primer_via_mcp_v0_6",
   "intent": "Read the bundled primers through MCP resources, synthesize them, and stage the result through an MCP tool.",
   "inputs": {},
   "constraints": {
@@ -33,7 +33,7 @@
       "effect": "transform",
       "args": {
         "from": "$gather.texts",
-        "title": "Axiomurgy MCP Primer Relay v0.5"
+        "title": "Axiomurgy MCP Primer Relay v0.6"
       }
     },
     {
@@ -64,7 +64,7 @@
         ],
         "name": "stage_note",
         "arguments": {
-          "path": "relay/primer_via_mcp_v0_5.md",
+          "path": "relay/primer_via_mcp_v0_6.md",
           "content": "$brief"
         }
       },
