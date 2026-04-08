@@ -21,7 +21,7 @@ Axiomurgy treats AI magic as **permissioned causality**:
 
 ## Current repo truth
 
-This v0.8 relay adds:
+This v1.0 relay adds:
 - portable review contracts (diffable witnesses with path normalization + redaction)
 - unresolved dynamic input signaling in review bundles and attestation
 - a cross-platform smoke runner (`python scripts/smoke.py`)
@@ -29,6 +29,16 @@ This v0.8 relay adds:
 - review bundles (describe + lint + plan + manifest + fingerprints + environment metadata)
 - review bundle verification against current repo state
 - execution attestation against a reviewed bundle
+- capability manifests and reviewed capability envelopes for capability-sealed execution
+- capability usage tracing in witnesses and overreach mismatch in attestation
+- enforced vessels: `--enforce-review-bundle` can block undeclared capability use before side effects
+- machine-readable capability denial events in witness traces
+- execution outcomes separate from attestation semantics
+
+This v1.1 relay adds:
+- Ouroboros Chamber: an opt-in cyclic runner (`--cycle-config`) for bounded supervised improvement
+- deterministic scoring and rollback via shadow spell files (no repo mutation by default)
+- cycle witnesses (`*.ouroboros.json` + `*.ouroboros.raw.json`) for auditability
 - canonical JSON witnesses (trace/prov/proofs) with nondeterministic fields marked
 
 ## Non-negotiable invariants

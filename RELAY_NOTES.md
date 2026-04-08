@@ -1,11 +1,18 @@
-# Axiomurgy v0.8 relay notes
+# Axiomurgy v1.0 relay notes
 
 What this lap adds:
 - diffable witnesses with path normalization (repo-relative POSIX) and redaction for opaque absolute paths
 - raw witness artifacts preserved for forensics (wall-clock times + machine-specific paths)
 - input manifests classify declared_static vs declared_dynamic vs unresolved_dynamic
 - unresolved_dynamic inputs downgrade attestation to `partial` by default
+- capability manifests and a reviewed capability envelope in review bundles
+- capability usage tracing in execution witnesses (raw keeps fuller detail; diffable remains portable)
+- attestation marks undeclared capability use as `mismatch`
+- enforced vessels: `--enforce-review-bundle` blocks undeclared capability use before side effects
+- denial events are recorded in raw + diffable traces (`capability_denials`)
+- execution outcomes are first-class in results (`execution_outcome`)
 - cross-platform smoke runner: `python scripts/smoke.py`
+- Ouroboros Chamber (v1.1): optional cyclic runner (`--cycle-config`) with allowlisted mutations, deterministic scoring, rollback via shadow spells, and cycle witnesses
 
 Verified demos in this relay:
 - `python axiomurgy.py spellbooks/primer_codex --describe`

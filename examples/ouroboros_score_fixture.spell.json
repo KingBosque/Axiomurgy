@@ -1,0 +1,29 @@
+{
+  "spell": "ouroboros_score_fixture",
+  "intent": "Deterministic fixture spell for Ouroboros Chamber scoring demos.",
+  "inputs": {
+    "score": 1.0,
+    "score_path": "artifacts/ouroboros_score.json"
+  },
+  "constraints": {
+    "risk": "low"
+  },
+  "graph": [
+    {
+      "id": "write_score",
+      "rune": "gate.file_write",
+      "effect": "write",
+      "args": {
+        "from": {
+          "score": "$inputs.score"
+        },
+        "path": "$inputs.score_path"
+      }
+    }
+  ],
+  "rollback": [],
+  "witness": {
+    "record": true
+  }
+}
+

@@ -1,8 +1,8 @@
-# Axiomurgy v0.8 target
+# Axiomurgy v1.1 target
 
 ## Working title
 
-**Portable review contracts**
+**Ouroboros Chamber (optional cyclic runner)**
 
 ## Why this should be next
 
@@ -111,7 +111,7 @@ Review bundles and attestation should surface when dynamic inputs are not fully 
 
 Add `python scripts/smoke.py` as the primary local relay check.
 
-## Next (v0.9 sketch)
+## Next (v0.10 sketch)
 
 - stricter “reviewed execution required” flag for write-capable runs
 - structured diff tooling over manifests and witnesses

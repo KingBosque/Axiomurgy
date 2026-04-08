@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import heapq
 import json
@@ -21,7 +22,7 @@ import jsonschema
 import requests
 import yaml
 
-VERSION = "0.7.0"
+VERSION = "1.0.0"
 ROOT = Path(__file__).resolve().parent
 DEFAULT_POLICY_PATH = ROOT / "policies" / "default.policy.json"
 DEFAULT_SCHEMA_PATH = ROOT / "spell.schema.json"
@@ -30,6 +31,18 @@ DEFAULT_ARTIFACT_DIR = ROOT / "artifacts"
 MCP_PROTOCOL_VERSION = "2025-11-25"
 RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 HTTP_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+# v0.9 capability-sealed execution: stable, reviewed capability envelope kinds.
+CAPABILITY_KINDS = {
+    "filesystem.read",
+    "filesystem.write",
+    "network.http",
+    "process.spawn",
+    "mcp.resource.read",
+    "mcp.tool.call",
+    "policy.evaluate",
+    "witness.emit",
+}
 
 
 class AxiomurgyError(Exception):
@@ -54,6 +67,12 @@ class ApprovalRequiredError(AxiomurgyError):
 
 class StepExecutionError(AxiomurgyError):
     pass
+
+
+class CapabilityDeniedError(AxiomurgyError):
+    def __init__(self, payload: Dict[str, Any]) -> None:
+        super().__init__(payload.get("reason") or "Capability denied by vessel.")
+        self.payload = payload
 
 
 class ProofFailure(StepExecutionError):
@@ -339,6 +358,279 @@ def json_dumps(data: Any) -> str:
 def canonical_json(data: Any) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True)
 
+
+def load_cycle_config(path: Path) -> Dict[str, Any]:
+    raw = load_json(path)
+    if not isinstance(raw, dict):
+        raise SpellValidationError("cycle config must be a JSON object")
+    max_rev = int(raw.get("max_revolutions", 1))
+    flux_budget = int(raw.get("flux_budget", max_rev))
+    plateau_window = int(raw.get("plateau_window", 2))
+    stop_conditions = raw.get("stop_conditions", {}) or {}
+    if not isinstance(stop_conditions, dict):
+        raise SpellValidationError("cycle config stop_conditions must be an object")
+    metric = raw.get("target_metric", {}) or {}
+    if not isinstance(metric, dict) or metric.get("kind") != "fixture_score":
+        raise SpellValidationError("cycle config target_metric.kind must be 'fixture_score' for v1.1")
+    metric_path = metric.get("path")
+    if not isinstance(metric_path, str) or not metric_path:
+        raise SpellValidationError("cycle config target_metric.path must be a non-empty string")
+    allowlist = raw.get("mutation_target_allowlist", []) or []
+    if not isinstance(allowlist, list) or not all(isinstance(x, str) for x in allowlist):
+        raise SpellValidationError("cycle config mutation_target_allowlist must be a list of strings")
+    targets = raw.get("mutation_targets", []) or []
+    if not isinstance(targets, list) or not targets:
+        raise SpellValidationError("cycle config mutation_targets must be a non-empty list")
+    for item in targets:
+        if not isinstance(item, dict):
+            raise SpellValidationError("cycle config mutation_targets entries must be objects")
+        if not isinstance(item.get("path"), str) or not item["path"]:
+            raise SpellValidationError("cycle config mutation_targets[].path must be a non-empty string")
+        if not isinstance(item.get("choices"), list) or not item["choices"]:
+            raise SpellValidationError("cycle config mutation_targets[].choices must be a non-empty list")
+    return {
+        "max_revolutions": max_rev,
+        "flux_budget": flux_budget,
+        "plateau_window": plateau_window,
+        "target_metric": {"kind": "fixture_score", "path": metric_path},
+        "rollback_mode": str(raw.get("rollback_mode", "shadow_copy")),
+        "require_approval_for_accept": bool(raw.get("require_approval_for_accept", False)),
+        "mutation_target_allowlist": list(allowlist),
+        "mutation_targets": targets,
+        "stop_conditions": {
+            "max_failures": int(stop_conditions.get("max_failures", max_rev)),
+            "min_improvement": float(stop_conditions.get("min_improvement", 0.0)),
+            "no_improve_for": int(stop_conditions.get("no_improve_for", plateau_window)),
+        },
+    }
+
+
+def _cycle_allowlisted(path: str, allowlist: List[str]) -> bool:
+    if not allowlist:
+        return False
+    return any(fnmatch.fnmatch(path, pat) for pat in allowlist)
+
+
+def _set_mutation(spell: Spell, mutation_path: str, value: Any, allowlist: List[str]) -> None:
+    if not _cycle_allowlisted(mutation_path, allowlist):
+        raise SpellValidationError(f"Mutation target not allowlisted: {mutation_path}")
+    parts = mutation_path.split(".")
+    if parts[:2] == ["spell", "inputs"] and len(parts) >= 3:
+        key = ".".join(parts[2:])
+        spell.inputs[key] = value
+        return
+    if parts[:2] == ["spell", "graph"] and len(parts) >= 6 and parts[3] == "args":
+        step_id = parts[2]
+        arg_key = ".".join(parts[4:])
+        for step in spell.graph:
+            if step.step_id == step_id:
+                step.args[arg_key] = value
+                return
+        raise SpellValidationError(f"Mutation step not found: {step_id}")
+    raise SpellValidationError(f"Unsupported mutation path: {mutation_path}")
+
+
+def _fixture_score(artifact_dir: Path, metric_path: str) -> float:
+    p = Path(metric_path)
+    p = p if p.is_absolute() else (artifact_dir / p)
+    doc = load_json(p)
+    if not isinstance(doc, dict) or "score" not in doc:
+        raise StepExecutionError(f"fixture_score missing numeric 'score' in {p}")
+    return float(doc["score"])
+
+
+def ouroboros_chamber(
+    resolved: ResolvedRunTarget,
+    *,
+    cycle_config_path: Path,
+    approvals: Set[str],
+    simulate: bool,
+    reviewed_bundle: Optional[Dict[str, Any]],
+    enforce_review_bundle: bool,
+) -> Dict[str, Any]:
+    cfg = load_cycle_config(cycle_config_path)
+    allowlist = cfg["mutation_target_allowlist"]
+    max_rev = cfg["max_revolutions"]
+    flux_budget = cfg["flux_budget"]
+    plateau_window = cfg["plateau_window"]
+    stop = cfg["stop_conditions"]
+    metric_path = cfg["target_metric"]["path"]
+    metric_abs = str((resolved.artifact_dir / metric_path).resolve())
+
+    chamber_dir = resolved.artifact_dir / "ouroboros"
+    chamber_dir.mkdir(parents=True, exist_ok=True)
+
+    revolutions: List[Dict[str, Any]] = []
+    failures = 0
+    best_score = float("-inf")
+    best_spell = resolved.spell
+    no_improve = 0
+    attempted = 0
+
+    # baseline execute to establish score (guardrails: failures => -inf)
+    baseline_spell = load_spell(resolved.spell.source_path)
+    baseline_spell.inputs = dict(resolved.spell.inputs)
+    baseline_spell.inputs["score_path"] = metric_abs
+    baseline_result = execute_spell(
+        baseline_spell,
+        ["approve", "read", "reason", "simulate", "transform", "verify", "write"],
+        approvals,
+        simulate,
+        resolved.policy_path,
+        resolved.artifact_dir,
+        reviewed_bundle=reviewed_bundle,
+        enforce_review_bundle=enforce_review_bundle,
+    )
+    baseline_score = float("-inf")
+    if baseline_result.get("status") == "succeeded":
+        try:
+            baseline_score = _fixture_score(resolved.artifact_dir, metric_path)
+        except Exception:
+            baseline_score = float("-inf")
+    best_score = baseline_score
+
+    target_list = cfg["mutation_targets"]
+    idx_target = 0
+
+    stop_reason = None
+    for rev in range(1, max_rev + 1):
+        if attempted >= flux_budget:
+            stop_reason = "flux_budget"
+            break
+        if failures >= stop["max_failures"]:
+            stop_reason = "max_failures"
+            break
+        if no_improve >= stop["no_improve_for"]:
+            stop_reason = "plateau"
+            break
+
+        state_trace = ["recall", "commune", "forge", "veil", "seal"]
+        target = target_list[idx_target % len(target_list)]
+        idx_target += 1
+        choices = list(target["choices"])
+        choice = choices[(rev - 1) % len(choices)]
+        mutation_path = str(target["path"])
+
+        # forge: create shadow spell from current best spell
+        shadow_spell = load_spell(best_spell.source_path) if best_spell.source_path.exists() else best_spell
+        shadow_spell.inputs = dict(best_spell.inputs)
+        # Ensure fixture outputs land under artifact_dir deterministically.
+        shadow_spell.inputs["score_path"] = metric_abs
+        shadow_spell.graph = [Step(**step.__dict__) for step in best_spell.graph]
+        _set_mutation(shadow_spell, mutation_path, choice, allowlist)
+
+        shadow_path = chamber_dir / f"rev_{rev:03d}.spell.json"
+        def step_to_json(s: Step, *, is_rollback: bool) -> Dict[str, Any]:
+            out: Dict[str, Any] = {
+                "id": s.step_id,
+                "rune": s.rune,
+                "effect": s.effect,
+                "args": s.args,
+                "requires": s.requires,
+                "description": s.description,
+            }
+            if s.output_schema is not None:
+                out["output_schema"] = s.output_schema
+            if s.confidence is not None:
+                out["confidence"] = s.confidence
+            if is_rollback:
+                out["compensates"] = s.compensates
+            return out
+
+        shadow_raw = {
+            "spell": shadow_spell.name,
+            "intent": shadow_spell.intent,
+            "inputs": shadow_spell.inputs,
+            "constraints": shadow_spell.constraints,
+            "graph": [step_to_json(s, is_rollback=False) for s in shadow_spell.graph],
+            "rollback": [step_to_json(s, is_rollback=True) for s in shadow_spell.rollback],
+            "witness": shadow_spell.witness,
+        }
+        shadow_path.write_text(json.dumps(shadow_raw, indent=2, ensure_ascii=False), encoding="utf-8")
+
+        # veil: execute shadow spell (still under enforced vessels/review contracts)
+        attempted += 1
+        exec_result = execute_spell(
+            load_spell(shadow_path),
+            ["approve", "read", "reason", "simulate", "transform", "verify", "write"],
+            approvals,
+            simulate,
+            resolved.policy_path,
+            resolved.artifact_dir,
+            reviewed_bundle=reviewed_bundle,
+            enforce_review_bundle=enforce_review_bundle,
+        )
+        score = float("-inf")
+        if exec_result.get("status") == "succeeded":
+            try:
+                score = _fixture_score(resolved.artifact_dir, metric_path)
+            except Exception:
+                score = float("-inf")
+        improved = score > best_score + float(stop["min_improvement"])
+        accepted = bool(improved)
+        if cfg["require_approval_for_accept"] and "accept" not in approvals:
+            accepted = False
+
+        if accepted:
+            best_score = score
+            best_spell = load_spell(shadow_path)
+            no_improve = 0
+        else:
+            no_improve += 1
+            if exec_result.get("status") != "succeeded":
+                failures += 1
+
+        revolutions.append(
+            {
+                "revolution": rev,
+                "states": state_trace,
+                "mutation": {"path": mutation_path, "value": choice},
+                "baseline_score": baseline_score,
+                "best_score_before": best_score if accepted else best_score,
+                "candidate_score": score,
+                "accepted": accepted,
+                "rejected": not accepted,
+                "rollback": (not accepted),
+                "stop_reason": None,
+                "execution_result": {
+                    "status": exec_result.get("status"),
+                    "trace_path": exec_result.get("trace_path"),
+                    "proof_path": exec_result.get("proof_path"),
+                    "capability_denials": exec_result.get("blocked"),
+                },
+            }
+        )
+
+    if stop_reason is None:
+        stop_reason = "max_revolutions"
+
+    witness = {
+        "mode": "cycle",
+        "chamber": "ouroboros",
+        "config_path": str(cycle_config_path),
+        "max_revolutions": max_rev,
+        "flux_budget": flux_budget,
+        "plateau_window": plateau_window,
+        "stop_reason": stop_reason,
+        "baseline_score": baseline_score,
+        "best_score": best_score,
+        "revolutions": revolutions,
+        "nondeterministic_fields": [],
+    }
+    raw_path = resolved.artifact_dir / f"{resolved.spell.name}.ouroboros.raw.json"
+    diff_path = resolved.artifact_dir / f"{resolved.spell.name}.ouroboros.json"
+    raw_path.write_text(canonical_json(witness), encoding="utf-8")
+    diff_path.write_text(canonical_json(normalize_paths_for_portability(json.loads(canonical_json(witness)), repo_root=ROOT)), encoding="utf-8")
+    return {
+        "mode": "cycle",
+        "status": "completed",
+        "stop_reason": stop_reason,
+        "baseline_score": baseline_score,
+        "best_score": best_score,
+        "ouroboros_witness_path": str(diff_path),
+        "ouroboros_witness_raw_path": str(raw_path),
+    }
+
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -490,6 +782,58 @@ class RuneContext:
         self.executed_steps: List[str] = []
         self._mcp_clients: List[MCPClient] = []
         self.proofs: List[Dict[str, Any]] = []
+        # v0.9 capability usage events (raw; normalized in diffable witnesses)
+        self.capability_events: List[Dict[str, Any]] = []
+        self.reviewed_capability_envelope: Optional[Set[str]] = None
+        self.enforce_review_bundle: bool = False
+        self.capability_denials: List[Dict[str, Any]] = []
+
+    def record_capability_event(
+        self,
+        *,
+        kind: str,
+        step_id: Optional[str] = None,
+        rune: Optional[str] = None,
+        target: Any = None,
+        detail: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if kind not in CAPABILITY_KINDS:
+            # Keep machine-readable but do not crash runtime if taxonomy drifts.
+            pass
+        declared = None
+        if self.reviewed_capability_envelope is not None:
+            declared = kind in self.reviewed_capability_envelope
+        event: Dict[str, Any] = {
+            "kind": kind,
+            "step_id": step_id,
+            "rune": rune,
+            "target": target,
+            "declared_by_review": declared,
+        }
+        if detail:
+            event["detail"] = detail
+        self.capability_events.append(event)
+
+    def record_capability_denial(
+        self,
+        *,
+        kind: str,
+        step_id: Optional[str],
+        rune: Optional[str],
+        target: Any,
+        reason: str,
+        source: str,
+    ) -> None:
+        denial: Dict[str, Any] = {
+            "kind": kind,
+            "step_id": step_id,
+            "rune": rune,
+            "target": target,
+            "reason": reason,
+            "source": source,
+            "declared_by_review": (kind in self.reviewed_capability_envelope) if self.reviewed_capability_envelope is not None else None,
+        }
+        self.capability_denials.append(denial)
 
     def add_mcp_client(self, client: "MCPClient") -> None:
         self._mcp_clients.append(client)
@@ -861,6 +1205,12 @@ def evaluate_policy_static(
 
 
 def evaluate_policy(ctx: RuneContext, step: Step) -> PolicyDecision:
+    ctx.record_capability_event(
+        kind="policy.evaluate",
+        step_id=step.step_id,
+        rune=step.rune,
+        target={"effect": step.effect},
+    )
     return evaluate_policy_static(ctx.spell, ctx.policy, ctx.approvals, ctx.simulate, step)
 
 
@@ -929,6 +1279,70 @@ def external_call_kind(step: Step) -> Optional[str]:
     return None
 
 
+def capability_kinds_for_step(step: Step) -> Set[str]:
+    """
+    Deterministic, conservative capability classification for review bundles.
+    This is independent of the coarse runtime rune gate (read/write/verify/etc).
+    """
+    rune = step.rune
+    kinds: Set[str] = set()
+
+    # Runtime-internal invariants: execution always evaluates policy and emits witnesses.
+    kinds.add("policy.evaluate")
+    kinds.add("witness.emit")
+
+    # Filesystem read surfaces
+    if rune in {"mirror.read"}:
+        kinds.add("filesystem.read")
+
+    # MCP read surfaces
+    if rune in {"mirror.mcp_read_resources"}:
+        kinds.add("mcp.resource.read")
+
+    # Filesystem write surfaces
+    if rune in {"gate.file_write", "gate.archive", "gate.emit"}:
+        kinds.add("filesystem.write")
+
+    # Network surfaces
+    if rune == "gate.openapi_call":
+        kinds.add("network.http")
+
+    # MCP tool call surfaces
+    if rune == "gate.mcp_call_tool":
+        kinds.add("mcp.tool.call")
+
+    # Any explicit write effect conservatively implies filesystem.write unless already covered.
+    # (This keeps the envelope meaningful even if new write runes are introduced without mapping.)
+    if step.effect == "write":
+        kinds.add("filesystem.write")
+
+    return kinds
+
+
+def capability_manifest_for_plan(plan: List[Step]) -> Dict[str, Any]:
+    per_step: List[Dict[str, Any]] = []
+    required: Set[str] = set()
+    for step in plan:
+        kinds = capability_kinds_for_step(step)
+        required.update(kinds)
+        per_step.append(
+            {
+                "step_id": step.step_id,
+                "rune": step.rune,
+                "effect": step.effect,
+                "kinds": sorted(kinds),
+            }
+        )
+    required_sorted = sorted(required)
+    return {
+        "kinds_catalog": sorted(CAPABILITY_KINDS),
+        "required": required_sorted,
+        "per_step": per_step,
+        # Default reviewed envelope is the required set for this plan.
+        "envelope": {"kinds": required_sorted},
+    }
+
+
 
 def build_approval_manifest(
     resolved: ResolvedRunTarget,
@@ -938,6 +1352,8 @@ def build_approval_manifest(
     external_calls: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     input_classification = classify_input_manifest(resolved.spell)
+    plan = compile_plan(resolved.spell)
+    capabilities = capability_manifest_for_plan(plan)
     return {
         "spell": resolved.spell.name,
         "spellbook": {
@@ -953,6 +1369,7 @@ def build_approval_manifest(
         "write_steps": write_steps,
         "external_calls": external_calls,
         "input_manifest": input_classification["summary"],
+        "capabilities": {"required": capabilities.get("required", []), "envelope": capabilities.get("envelope", {})},
         "simulate_recommendation": bool(required_approvals or external_calls or write_steps),
         "ordered_steps": [
             {
@@ -979,6 +1396,7 @@ def build_plan_summary(
     if resolved.spellbook is not None:
         fingerprints["spellbook"] = compute_spellbook_fingerprints(resolved, repo_root=repo_root)
     plan = compile_plan(resolved.spell)
+    capabilities = capability_manifest_for_plan(plan)
     static_values = {"inputs": resolved.spell.inputs}
     step_rows: List[Dict[str, Any]] = []
     required_approvals: List[Dict[str, Any]] = []
@@ -1053,6 +1471,7 @@ def build_plan_summary(
         "policy_path": str(resolved.policy_path),
         "artifact_dir": str(resolved.artifact_dir),
         "fingerprints": fingerprints,
+        "capabilities": capabilities,
         "steps": step_rows,
         "write_steps": write_steps,
         "required_approvals": required_approvals,
@@ -1075,6 +1494,8 @@ def describe_target(resolved: ResolvedRunTarget) -> Dict[str, Any]:
     fingerprints = compute_spell_fingerprints(resolved.spell, resolved.policy_path, repo_root=repo_root)
     if resolved.spellbook is not None:
         fingerprints["spellbook"] = compute_spellbook_fingerprints(resolved, repo_root=repo_root)
+    plan = compile_plan(resolved.spell)
+    capabilities = capability_manifest_for_plan(plan)
     description = {
         "mode": "describe",
         "kind": "spellbook" if resolved.spellbook is not None else "spell",
@@ -1091,6 +1512,7 @@ def describe_target(resolved: ResolvedRunTarget) -> Dict[str, Any]:
         "policy_path": str(resolved.policy_path),
         "artifact_dir": str(resolved.artifact_dir),
         "fingerprints": fingerprints,
+        "capabilities": capabilities,
     }
     if resolved.spellbook is not None:
         description["spellbook"] = {
@@ -1366,6 +1788,22 @@ def compare_reviewed_bundle(reviewed: Dict[str, Any], current: Dict[str, Any]) -
     # Unresolved inputs degrade portability/contract strength; treat as allowlisted => partial.
     diff("fingerprints.input_manifest.classification.summary.unresolved_dynamic_present", reviewed_unresolved, current_unresolved, "allowlisted")
 
+    # v0.9 reviewed capability envelope (backward compatible if missing).
+    reviewed_caps = ((reviewed.get("capabilities") or {}).get("envelope") or {}).get("kinds")
+    current_caps = ((current.get("capabilities") or {}).get("envelope") or {}).get("kinds")
+    if reviewed_caps is None:
+        diffs.append(
+            {
+                "path": "capabilities.envelope.kinds",
+                "reviewed": None,
+                "current": current_caps,
+                "severity": "allowlisted",
+                "note": "Reviewed bundle missing capability envelope (v0.8 or earlier); cannot attest overreach from bundle alone.",
+            }
+        )
+    else:
+        diff("capabilities.envelope.kinds", reviewed_caps, current_caps, "required")
+
     required_mismatch = any(item["severity"] == "required" for item in diffs)
     allowlisted_mismatch = any(item["severity"] == "allowlisted" for item in diffs)
     status = "mismatch" if required_mismatch else "partial" if allowlisted_mismatch else "exact"
@@ -1399,8 +1837,9 @@ def build_review_bundle(resolved: ResolvedRunTarget, approvals: Optional[Set[str
     describe = describe_target(resolved)
     lint = lint_target(resolved.spellbook.source_path.parent if resolved.spellbook is not None else resolved.spell.source_path)
     plan = build_plan_summary(resolved, approvals=approvals, simulate=False)
+    capabilities = plan.get("capabilities") or describe.get("capabilities") or {}
     return {
-        "bundle_version": "0.7",
+        "bundle_version": "0.9",
         "environment": environment_metadata(),
         "target": {
             "kind": "spellbook" if resolved.spellbook is not None else "spell",
@@ -1412,6 +1851,7 @@ def build_review_bundle(resolved: ResolvedRunTarget, approvals: Optional[Set[str
         "plan": plan,
         "approval_manifest": plan.get("manifest"),
         "fingerprints": plan.get("fingerprints"),
+        "capabilities": capabilities,
     }
 
 
@@ -1427,6 +1867,31 @@ def run_step(
     decision: PolicyDecision,
     compensation_for: Optional[str] = None,
 ) -> RuneOutcome:
+    # v1.0 vessel enforcement: preflight predicted capabilities against reviewed envelope.
+    if ctx.enforce_review_bundle and ctx.reviewed_capability_envelope is not None:
+        predicted = capability_kinds_for_step(step)
+        over = sorted(set(predicted) - set(ctx.reviewed_capability_envelope))
+        if over:
+            kind = over[0]
+            payload = {
+                "kind": kind,
+                "step_id": step.step_id,
+                "rune": step.rune,
+                "target": summarize_write_target(step, resolve_static_value(step.args, {"inputs": ctx.spell.inputs}) if isinstance(step.args, dict) else {}),
+                "reason": f"Denied by vessel: capability '{kind}' not in reviewed envelope.",
+                "source": "review_envelope",
+                "predicted_overreach": over,
+            }
+            ctx.record_capability_denial(
+                kind=kind,
+                step_id=step.step_id,
+                rune=step.rune,
+                target=payload.get("target"),
+                reason=payload["reason"],
+                source="review_envelope",
+            )
+            raise CapabilityDeniedError(payload)
+
     capability = REGISTRY.required_capability(step.rune)
     if capability not in ctx.capabilities:
         raise CapabilityError(f"Step '{step.step_id}' requires capability '{capability}' for rune '{step.rune}'")
@@ -1620,6 +2085,7 @@ def build_scxml(spell: Spell, plan: List[Step]) -> str:
 
 
 def export_witnesses(ctx: RuneContext, plan: List[Step], trace: Dict[str, Any]) -> None:
+    ctx.record_capability_event(kind="witness.emit", target={"artifact_dir": str(ctx.artifact_dir)})
     prov = build_prov_document(ctx, plan)
     proofs = build_proof_summary(ctx.proofs)
     # Raw witnesses preserve wall-clock timing for debugging.
@@ -1641,14 +2107,22 @@ def execute_spell(
     simulate: bool,
     policy_path: Path,
     artifact_dir: Path,
+    reviewed_bundle: Optional[Dict[str, Any]] = None,
+    enforce_review_bundle: bool = False,
 ) -> Dict[str, Any]:
     check_spell_capabilities(spell, capabilities)
     ctx = RuneContext(spell, capabilities, approvals, simulate, artifact_dir, load_json(policy_path))
+    ctx.enforce_review_bundle = bool(enforce_review_bundle)
+    reviewed_envelope = (((reviewed_bundle or {}).get("capabilities") or {}).get("envelope") or {}).get("kinds")
+    if isinstance(reviewed_envelope, list):
+        ctx.reviewed_capability_envelope = {str(item) for item in reviewed_envelope}
     fingerprints = compute_spell_fingerprints(spell, policy_path, repo_root=ROOT)
     plan = compile_plan(spell)
     rollback_map = {step.compensates: step for step in spell.rollback if step.compensates}
     started_at = utc_now()
     status = "succeeded"
+    block_reason: Optional[str] = None
+    block_source: Optional[str] = None
     error_message: Optional[str] = None
     try:
         for step in plan:
@@ -1716,6 +2190,9 @@ def execute_spell(
     except Exception as exc:
         status = "failed"
         error_message = str(exc)
+        if isinstance(exc, CapabilityDeniedError):
+            block_reason = str(exc)
+            block_source = str((exc.payload or {}).get("source") or "review_envelope")
         for step_id in reversed(ctx.executed_steps):
             rollback_step = rollback_map.get(step_id)
             if not rollback_step:
@@ -1753,6 +2230,8 @@ def execute_spell(
         "compensations": [event.__dict__ for event in ctx.compensation_events],
         "inputs": spell.inputs,
         "error": error_message,
+        "capability_events": list(ctx.capability_events),
+        "capability_denials": list(ctx.capability_denials),
         "proofs": build_proof_summary(ctx.proofs),
         "nondeterministic_fields": ["execution_id", "started_at", "ended_at", "proofs.items[].timestamp"],
     }
@@ -1761,6 +2240,10 @@ def execute_spell(
     final_step_id = plan[-1].step_id if status == "succeeded" else None
     final_meta = ctx.step_meta.get(final_step_id or "", {})
     final_value = ctx.values.get(final_step_id) if final_step_id else None
+    used_kinds = sorted({str(item.get("kind")) for item in ctx.capability_events if isinstance(item, dict) and item.get("kind")})
+    reviewed_kinds = sorted(ctx.reviewed_capability_envelope) if ctx.reviewed_capability_envelope is not None else None
+    overreach = sorted(set(used_kinds) - set(reviewed_kinds or [])) if reviewed_kinds is not None else []
+    execution_outcome = None
     result = {
         "spell": spell.name,
         "intent": spell.intent,
@@ -1777,6 +2260,13 @@ def execute_spell(
         "proof_path": str(ctx.artifact_dir / f"{spell.name}.proofs.json"),
         "proofs": build_proof_summary(ctx.proofs),
         "execution_id": ctx.execution_id,
+        "capabilities": {
+            "used": used_kinds,
+            "reviewed_envelope": reviewed_kinds,
+            "overreach": overreach,
+        },
+        "execution_outcome": execution_outcome,
+        "blocked": {"reason": block_reason, "source": block_source} if block_reason else None,
     }
     ctx.close()
     return result
@@ -1836,6 +2326,12 @@ def rune_mcp_read_resources(ctx: RuneContext, step: Step, args: Dict[str, Any]) 
         cmd[0] = sys.executable
     if len(cmd) >= 2 and cmd[1].endswith(".py") and not Path(cmd[1]).is_absolute():
         cmd[1] = str(ctx.rel_path(cmd[1]))
+    ctx.record_capability_event(
+        kind="process.spawn",
+        step_id=step.step_id,
+        rune=step.rune,
+        target={"cmd": cmd[:3], "cmd_len": len(cmd)},
+    )
     client = MCPClient(cmd)
     ctx.add_mcp_client(client)
     resources = client.list_resources()
@@ -2101,6 +2597,12 @@ def rune_approval_gate(ctx: RuneContext, step: Step, args: Dict[str, Any]) -> Ru
 def rune_archive(ctx: RuneContext, step: Step, args: Dict[str, Any]) -> RuneOutcome:
     artifact = ctx.resolve(args.get("from"))
     count = len(artifact) if isinstance(artifact, list) else 1
+    ctx.record_capability_event(
+        kind="filesystem.write",
+        step_id=step.step_id,
+        rune=step.rune,
+        target={"count": count, "mode": "simulate" if ctx.simulate else "archive"},
+    )
     return RuneOutcome({"archived": count, "status": "simulated_archive" if ctx.simulate else "archive_complete"}, 0.98, side_effect=not ctx.simulate)
 
 
@@ -2108,6 +2610,12 @@ def rune_archive(ctx: RuneContext, step: Step, args: Dict[str, Any]) -> RuneOutc
 def rune_emit(ctx: RuneContext, step: Step, args: Dict[str, Any]) -> RuneOutcome:
     artifact = ctx.resolve(args.get("from"))
     target = str(ctx.resolve(args.get("target", "stdout")))
+    ctx.record_capability_event(
+        kind="filesystem.write",
+        step_id=step.step_id,
+        rune=step.rune,
+        target={"target": target},
+    )
     status = "simulated_write" if ctx.simulate else "emitted"
     return RuneOutcome({"target": target, "emitted": artifact, "status": status}, 0.98, side_effect=not ctx.simulate)
 
@@ -2119,6 +2627,12 @@ def rune_file_write(ctx: RuneContext, step: Step, args: Dict[str, Any]) -> RuneO
     if raw_path is None:
         raise StepExecutionError("gate.file_write requires 'path'")
     target = ctx.maybe_path(str(raw_path))
+    ctx.record_capability_event(
+        kind="filesystem.write",
+        step_id=step.step_id,
+        rune=step.rune,
+        target=str(target),
+    )
     if ctx.simulate:
         payload = artifact if isinstance(artifact, str) else json.dumps(artifact, ensure_ascii=False)
         return RuneOutcome(
@@ -2175,6 +2689,12 @@ def rune_openapi_call(ctx: RuneContext, step: Step, args: Dict[str, Any]) -> Run
             0.96,
             "Simulation skips the remote server and assumes the contract is still accurate.",
         )
+    ctx.record_capability_event(
+        kind="network.http",
+        step_id=step.step_id,
+        rune=step.rune,
+        target={"method": method, "url": url},
+    )
     response = requests.request(method, url, json=body, params=query_values, timeout=10)
     response_body = response.json() if "application/json" in response.headers.get("Content-Type", "") else response.text
     response_key = str(response.status_code)
@@ -2213,6 +2733,12 @@ def rune_mcp_call_tool(ctx: RuneContext, step: Step, args: Dict[str, Any]) -> Ru
             0.95,
             "Simulation skips the remote MCP server and any external effects.",
         )
+    ctx.record_capability_event(
+        kind="process.spawn",
+        step_id=step.step_id,
+        rune=step.rune,
+        target={"cmd": cmd[:3], "cmd_len": len(cmd)},
+    )
     client = MCPClient(cmd)
     ctx.add_mcp_client(client)
     return RuneOutcome(client.call_tool(name, arguments), 0.97, "Tool behavior depends on the remote MCP server implementation.", True)
@@ -2236,6 +2762,12 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     mode.add_argument("--verify-review-bundle", default=None, help="Verify current state against a reviewed bundle JSON")
     parser.add_argument("--manifest-out", default=None, help="Optional path to write the approval manifest JSON when using --plan")
     parser.add_argument("--review-bundle-in", default=None, help="Optional reviewed bundle JSON to attest execution against")
+    parser.add_argument("--cycle-config", default=None, help="Optional Ouroboros Chamber cyclic runner config JSON (opt-in)")
+    parser.add_argument(
+        "--enforce-review-bundle",
+        action="store_true",
+        help="Enforce the reviewed capability envelope as a vessel (requires --review-bundle-in)",
+    )
     return parser.parse_args(argv)
 
 
@@ -2248,6 +2780,12 @@ def main(argv: Sequence[str]) -> int:
         return 2
     if args.manifest_out and not (args.plan or args.review_bundle):
         print("ERROR: --manifest-out can only be used with --plan or --review-bundle")
+        return 2
+    if args.enforce_review_bundle and not args.review_bundle_in:
+        print("ERROR: --enforce-review-bundle requires --review-bundle-in")
+        return 2
+    if args.cycle_config and (args.describe or args.plan or args.lint or args.review_bundle or args.verify_review_bundle):
+        print("ERROR: --cycle-config is only valid for execution mode")
         return 2
     if args.simulate and (args.describe or args.plan or args.lint):
         print("ERROR: --simulate is only valid for execution mode")
@@ -2285,22 +2823,53 @@ def main(argv: Sequence[str]) -> int:
             else:
                 capabilities = {"read", "memory", "reason", "transform", "verify", "approve", "simulate", "write"}
                 capabilities.update(args.capability)
-                result = execute_spell(
-                    resolved.spell,
-                    sorted(capabilities),
-                    set(args.approve),
-                    bool(args.simulate),
-                    resolved.policy_path,
-                    resolved.artifact_dir,
-                )
+                reviewed_in = load_json(Path(args.review_bundle_in).resolve()) if args.review_bundle_in else None
+                if args.cycle_config:
+                    result = ouroboros_chamber(
+                        resolved,
+                        cycle_config_path=Path(args.cycle_config).resolve(),
+                        approvals=set(args.approve),
+                        simulate=bool(args.simulate),
+                        reviewed_bundle=reviewed_in,
+                        enforce_review_bundle=bool(args.enforce_review_bundle),
+                    )
+                else:
+                    result = execute_spell(
+                        resolved.spell,
+                        sorted(capabilities),
+                        set(args.approve),
+                        bool(args.simulate),
+                        resolved.policy_path,
+                        resolved.artifact_dir,
+                        reviewed_bundle=reviewed_in,
+                        enforce_review_bundle=bool(args.enforce_review_bundle),
+                    )
                 if args.review_bundle_in:
                     reviewed = load_json(Path(args.review_bundle_in).resolve())
-                    result["attestation"] = {
-                        **compute_attestation(reviewed, resolved, approvals=set(args.approve)),
-                        "reviewed_bundle_path": str(Path(args.review_bundle_in).resolve()),
-                    }
+                    att = compute_attestation(reviewed, resolved, approvals=set(args.approve))
+                    overreach = ((result.get("capabilities") or {}).get("overreach")) or []
+                    if overreach:
+                        att["status"] = "mismatch"
+                        att["diffs"].append(
+                            {
+                                "path": "capabilities.overreach",
+                                "reviewed": (((reviewed.get("capabilities") or {}).get("envelope") or {}).get("kinds")),
+                                "current": sorted((result.get("capabilities") or {}).get("used") or []),
+                                "severity": "required",
+                                "note": f"Undeclared capability use detected: {sorted(overreach)}",
+                            }
+                        )
+                    result["attestation"] = {**att, "reviewed_bundle_path": str(Path(args.review_bundle_in).resolve())}
+                    # v1.0 execution outcomes: enforcement vs observed attestation.
+                    if result.get("status") != "succeeded" and (result.get("blocked") or {}).get("source") == "review_envelope":
+                        result["execution_outcome"] = "blocked_overreach"
+                    elif att["status"] == "exact":
+                        result["execution_outcome"] = "executed_exact"
+                    else:
+                        result["execution_outcome"] = "executed_partial"
                 else:
                     result["attestation"] = {"status": "none", "diffs": [], "reviewed_bundle_path": None}
+                    result["execution_outcome"] = "executed_partial" if result.get("status") == "succeeded" else "blocked_policy"
                 if resolved.spellbook is not None:
                     result["spellbook"] = {
                         "name": resolved.spellbook.name,

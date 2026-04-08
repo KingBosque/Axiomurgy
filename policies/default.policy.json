@@ -1,5 +1,9 @@
 {
-  "version": "0.7.0",
+  "version": "1.0.0",
+  "attestation": {
+    "undeclared_capability_severity": "mismatch",
+    "note": "Capability overreach is surfaced as an attestation mismatch by the runtime; this metadata is non-enforcing."
+  },
   "requires_approval": [
     {
       "effect": ["write"],

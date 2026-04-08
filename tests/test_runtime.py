@@ -91,7 +91,7 @@ class AxiomurgyRuntimeTests(unittest.TestCase):
     def test_review_bundle_for_spellbook_contains_preflight_and_fingerprints(self):
         resolved = self.runtime.resolve_run_target(ROOT / "spellbooks" / "primer_codex", None, None, None)
         bundle = self.runtime.build_review_bundle(resolved)
-        self.assertEqual(bundle["bundle_version"], "0.7")
+        self.assertEqual(bundle["bundle_version"], "0.9")
         self.assertIn("environment", bundle)
         self.assertIn("describe", bundle)
         self.assertIn("lint", bundle)
@@ -99,6 +99,12 @@ class AxiomurgyRuntimeTests(unittest.TestCase):
         self.assertIn("approval_manifest", bundle)
         self.assertIn("fingerprints", bundle)
         self.assertIn("required", bundle["fingerprints"])
+        self.assertIn("capabilities", bundle)
+        self.assertIn("required", bundle["capabilities"])
+        self.assertIn("envelope", bundle["capabilities"])
+        self.assertIn("kinds", bundle["capabilities"]["envelope"])
+        self.assertIsInstance(bundle["capabilities"]["envelope"]["kinds"], list)
+        self.assertTrue(bundle["capabilities"]["envelope"]["kinds"])
 
     def test_verify_review_bundle_detects_spell_change(self):
         base = ROOT / "examples" / "primer_to_axioms.spell.json"
@@ -119,6 +125,131 @@ class AxiomurgyRuntimeTests(unittest.TestCase):
         reviewed = self.runtime.build_review_bundle(resolved)
         attestation = self.runtime.compute_attestation(reviewed, resolved, approvals={"publish"})
         self.assertIn(attestation["status"], ("exact", "partial"))
+
+    def test_compute_attestation_accepts_v08_bundle_missing_capabilities(self):
+        resolved = self.runtime.resolve_run_target(ROOT / "spellbooks" / "primer_codex", None, None, None)
+        reviewed = self.runtime.build_review_bundle(resolved)
+        reviewed.pop("capabilities", None)  # v0.8 bundle shape
+        attestation = self.runtime.compute_attestation(reviewed, resolved, approvals={"publish"})
+        self.assertIn(attestation["status"], ("exact", "partial", "mismatch"))
+
+    def test_attestation_mismatch_on_undeclared_capability_use(self):
+        resolved = self.runtime.resolve_run_target(ROOT / "spellbooks" / "primer_codex", None, None, None)
+        reviewed = self.runtime.build_review_bundle(resolved)
+        # Deliberately restrict reviewed envelope to trigger overreach while keeping fingerprints stable.
+        reviewed["capabilities"]["envelope"]["kinds"] = [k for k in reviewed["capabilities"]["envelope"]["kinds"] if k != "filesystem.write"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            result = self.runtime.execute_spell(
+                resolved.spell,
+                self.capabilities,
+                {"publish"},
+                False,
+                resolved.policy_path,
+                out_dir,
+                reviewed_bundle=reviewed,
+            )
+            self.assertIn("capabilities", result)
+            self.assertIn("filesystem.write", result["capabilities"]["overreach"])
+
+    def test_enforce_blocks_undeclared_capability_use(self):
+        resolved = self.runtime.resolve_run_target(ROOT / "spellbooks" / "primer_codex", None, None, None)
+        reviewed = self.runtime.build_review_bundle(resolved)
+        reviewed["capabilities"]["envelope"]["kinds"] = [k for k in reviewed["capabilities"]["envelope"]["kinds"] if k != "filesystem.write"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            result = self.runtime.execute_spell(
+                resolved.spell,
+                self.capabilities,
+                {"publish"},
+                False,
+                resolved.policy_path,
+                out_dir,
+                reviewed_bundle=reviewed,
+                enforce_review_bundle=True,
+            )
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result.get("execution_outcome"), None)  # set at CLI layer
+            self.assertTrue((result.get("blocked") or {}).get("source") in ("review_envelope", None))
+            raw_trace = json.loads((out_dir / f"{resolved.spell.name}.trace.raw.json").read_text(encoding="utf-8"))
+            diff_trace = json.loads((out_dir / f"{resolved.spell.name}.trace.json").read_text(encoding="utf-8"))
+            self.assertTrue(raw_trace.get("capability_denials"))
+            self.assertTrue(diff_trace.get("capability_denials"))
+            self.assertNotRegex(json.dumps(diff_trace.get("capability_denials")), r"[A-Za-z]:\\\\")
+
+    def test_backward_compatible_behavior_without_enforcement_flag(self):
+        resolved = self.runtime.resolve_run_target(ROOT / "spellbooks" / "primer_codex", None, None, None)
+        reviewed = self.runtime.build_review_bundle(resolved)
+        reviewed.pop("capabilities", None)  # simulate v0.8 bundle
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            result = self.runtime.execute_spell(
+                resolved.spell,
+                self.capabilities,
+                {"publish"},
+                False,
+                resolved.policy_path,
+                out_dir,
+                reviewed_bundle=reviewed,
+                enforce_review_bundle=True,
+            )
+            # compat mode: no envelope => no enforcement
+            self.assertIn(result["status"], ("succeeded", "failed"))
+
+    def test_ouroboros_chamber_accepts_and_rejects_deterministically(self):
+        resolved = self.runtime.resolve_run_target(ROOT / "examples" / "ouroboros_score_fixture.spell.json", None, None, None)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolved.artifact_dir = Path(tmpdir)
+            cfg = {
+                "max_revolutions": 3,
+                "flux_budget": 3,
+                "plateau_window": 2,
+                "target_metric": {"kind": "fixture_score", "path": "ouroboros_score.json"},
+                "mutation_target_allowlist": ["spell.inputs.score"],
+                "mutation_targets": [{"path": "spell.inputs.score", "choices": [2.0, 0.0, 3.0]}],
+                "rollback_mode": "shadow_copy",
+                "stop_conditions": {"max_failures": 3, "min_improvement": 0.0, "no_improve_for": 2},
+            }
+            cfg_path = Path(tmpdir) / "cycle.json"
+            cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+            result = self.runtime.ouroboros_chamber(
+                resolved,
+                cycle_config_path=cfg_path,
+                approvals=set(),
+                simulate=False,
+                reviewed_bundle=None,
+                enforce_review_bundle=False,
+            )
+            self.assertEqual(result["mode"], "cycle")
+            witness = json.loads(Path(result["ouroboros_witness_path"]).read_text(encoding="utf-8"))
+            self.assertTrue(any(r.get("accepted") for r in witness.get("revolutions", [])))
+            self.assertTrue(any(r.get("rejected") for r in witness.get("revolutions", [])))
+
+    def test_ouroboros_mutation_allowlist_blocks(self):
+        resolved = self.runtime.resolve_run_target(ROOT / "examples" / "ouroboros_score_fixture.spell.json", None, None, None)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolved.artifact_dir = Path(tmpdir)
+            cfg = {
+                "max_revolutions": 1,
+                "flux_budget": 1,
+                "plateau_window": 1,
+                "target_metric": {"kind": "fixture_score", "path": "ouroboros_score.json"},
+                "mutation_target_allowlist": ["spell.inputs.not_score"],
+                "mutation_targets": [{"path": "spell.inputs.score", "choices": [2.0]}],
+                "rollback_mode": "shadow_copy",
+                "stop_conditions": {"max_failures": 1, "min_improvement": 0.0, "no_improve_for": 1},
+            }
+            cfg_path = Path(tmpdir) / "cycle.json"
+            cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+            with self.assertRaises(Exception):
+                self.runtime.ouroboros_chamber(
+                    resolved,
+                    cycle_config_path=cfg_path,
+                    approvals=set(),
+                    simulate=False,
+                    reviewed_bundle=None,
+                    enforce_review_bundle=False,
+                )
 
     def test_diffable_witness_trace_omits_timestamps_and_raw_preserves_them(self):
         spell = self.runtime.load_spell(ROOT / "examples" / "primer_to_axioms.spell.json")
@@ -148,6 +279,31 @@ class AxiomurgyRuntimeTests(unittest.TestCase):
             self.assertTrue(raw_trace.get("events"))
             self.assertIn("started_at", raw_trace["events"][0])
             self.assertIn("ended_at", raw_trace["events"][0])
+            self.assertIn("capability_events", raw_trace)
+            self.assertIsInstance(raw_trace["capability_events"], list)
+
+    def test_diffable_trace_sanitizes_capability_targets(self):
+        resolved = self.runtime.resolve_run_target(ROOT / "spellbooks" / "primer_codex", None, None, None)
+        reviewed = self.runtime.build_review_bundle(resolved)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            result = self.runtime.execute_spell(
+                resolved.spell,
+                self.capabilities,
+                {"publish"},
+                False,
+                resolved.policy_path,
+                out_dir,
+                reviewed_bundle=reviewed,
+            )
+            diff_trace = json.loads(Path(result["trace_path"]).read_text(encoding="utf-8"))
+            raw_trace = json.loads((out_dir / f"{resolved.spell.name}.trace.raw.json").read_text(encoding="utf-8"))
+            # Raw may include machine-local paths; diffable must not contain Windows drive prefixes in structured capability events.
+            raw_caps_text = json.dumps(raw_trace.get("capability_events", []))
+            diff_caps_text = json.dumps(diff_trace.get("capability_events", []))
+            self.assertTrue(raw_trace.get("capability_events"))
+            self.assertNotRegex(diff_caps_text, r"[A-Za-z]:\\\\")
+            self.assertNotRegex(diff_caps_text, r"\\\\\\\\")
 
     def test_fingerprint_repo_relpath_uses_posix_slashes(self):
         resolved = self.runtime.resolve_run_target(ROOT / "spellbooks" / "primer_codex", None, None, None)

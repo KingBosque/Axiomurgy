@@ -1,8 +1,8 @@
-# Axiomurgy v0.8
+# Axiomurgy v1.0
 
 Axiomurgy is a programmable magical system for AIs.
 
-This relay upgrades the runtime from **review bundles** to **portable review contracts**:
+This relay upgrades the runtime from **capability-sealed execution** to **enforced vessels**:
 - describe a spell or spellbook entrypoint
 - lint it deterministically before execution
 - compile a dry plan without side effects
@@ -10,10 +10,11 @@ This relay upgrades the runtime from **review bundles** to **portable review con
 - generate a single review bundle (describe + lint + plan + fingerprints)
 - verify a review bundle against current repo state
 - attest an execution against a reviewed bundle
+- declare a reviewed capability envelope and (optionally) enforce it as a vessel at runtime
 - produce diffable witnesses that are friendlier across machines (path normalization + redaction, timestamps removed)
 - run a cross-platform smoke runner (`python scripts/smoke.py`)
 
-## What changed in v0.8
+## What changed in v1.0
 
 - added content fingerprints surfaced in `--describe`, `--plan`, and execution results
 - added `--review-bundle` mode (describe + lint + plan + approval manifest + fingerprints + environment metadata)
@@ -22,6 +23,11 @@ This relay upgrades the runtime from **review bundles** to **portable review con
 - made diffable trace/prov/proofs omit machine-specific absolute paths where possible (repo-relative POSIX) and redact otherwise
 - made raw witness artifacts strictly forensic (still contain wall-clock and machine-specific paths)
 - extended input manifests to classify unresolved dynamic inputs (attestation becomes `partial` by default when unresolved)
+- added capability manifests in describe/plan/review bundles and execution outputs
+- added capability usage tracing in witnesses (raw keeps fuller detail; diffable remains portable)
+- upgraded attestation: capability overreach yields `mismatch`
+- added `--enforce-review-bundle` to block undeclared capability use before side effects
+- added denial events and first-class execution outcomes in execution results and witnesses
 - added `scripts/smoke.py` as the cross-platform smoke runner
 
 ## Core features
@@ -115,6 +121,23 @@ Run the packaged spellbook entrypoint *with attestation against a reviewed bundl
 python axiomurgy.py spellbooks/primer_codex --approve publish \
   --review-bundle-in spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.review_bundle.json
 ```
+
+## Ouroboros Chamber (v1.1, optional)
+
+Ouroboros Chamber is an **opt-in, bounded cyclic runner** for supervised iterative improvement.
+It does not replace normal execution; it runs only when `--cycle-config` is provided.
+
+Example:
+
+```bash
+python axiomurgy.py examples/ouroboros_score_fixture.spell.json \
+  --cycle-config path/to/cycle.json
+```
+
+Notes:
+- review bundles + attestation still apply when `--review-bundle-in` is provided
+- enforced vessels still apply when `--enforce-review-bundle` is provided
+- mutations are restricted to explicit allowlists and applied to **shadow spell files** under the artifacts directory
 
 Run the MCP relay:
 
