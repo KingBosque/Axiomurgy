@@ -64,6 +64,15 @@ This v1.6 relay adds:
 - Optional **`acceptance_contract`** on cycle configs: primary metric mode (`maximize` / `minimize`), `required_improvement` (defaults merge with legacy `stop_conditions.min_improvement` when the block is absent), **guardrails** on secondary fixture metrics, **`tie_breakers`**, and mechanical **`reject_if`** flags versus the last accepted proposal
 - Deterministic **`evaluate_acceptance_contract`** seal step (per-revolution **`seal_decision`** JSON), resolved **`acceptance_contract`** and **`acceptance_summary`** counters on cycle witnesses; backward-compatible defaults when `acceptance_contract` is omitted
 
+This v1.7 relay adds:
+- **Baseline lineage** for Ouroboros: deterministic **`baseline_id`** / **`parent_baseline_id`** registry, optional **`rejected_candidate_snapshot`** rows (when enabled), **`promotion_records`** on accept only, **`baseline_reference_used_id`** on seal output, **`active_baseline_id`** per revolution, **`lineage_summary`** on the witness and cycle result; optional **`lineage_policy`** object on cycle configs for future non-breaking hooks
+
+This v1.8 relay adds:
+- **Run capsules** for Ouroboros: per-invocation **`run_id`** and isolated **`artifact_root`** under **`ouroboros_runs/`**, raw+diff **`run_manifest`**, witness **`run_capsule`** + **`key_artifact_paths_relative`**; cycle result includes **`run_artifact_root`**, **`run_manifest_path`**; optional **`run_capsule`** settings (`enabled`, `keep_last_n_runs`, `prune_old_capsules`)
+
+This v1.9 relay adds:
+- **Revolution capsules** for Ouroboros: deterministic **`revolution_id`** per preflight skip or veil attempt; executed revolutions use **`<run_root>/revolutions/rev_NNNN/`** for witnesses and **`shadow.spell.json`** copy; skipped revolutions record **`executed: false`** without fake execution artifacts; witness + **`run_manifest`** + cycle result expose **`revolution_capsules`**, **`proposal_id_to_revolution_id`**, counts, and **`revolution_artifact_roots`**; optional **`revolution_retention`** (default **preserve all**)
+
 ## Non-negotiable invariants
 
 Do not remove or weaken these without updating docs, examples, and tests together:

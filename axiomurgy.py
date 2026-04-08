@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import hashlib
+import shutil
 import heapq
 import json
 import os
@@ -22,7 +23,7 @@ import jsonschema
 import requests
 import yaml
 
-VERSION = "1.6.0"
+VERSION = "1.9.0"
 ROOT = Path(__file__).resolve().parent
 DEFAULT_POLICY_PATH = ROOT / "policies" / "default.policy.json"
 DEFAULT_SCHEMA_PATH = ROOT / "spell.schema.json"
@@ -359,6 +360,112 @@ def canonical_json(data: Any) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True)
 
 
+def _parse_run_capsule_config(raw: Any) -> Dict[str, Any]:
+    """v1.8 optional run capsule settings (non-breaking defaults). v1.9 adds revolution_retention hook."""
+    defaults: Dict[str, Any] = {
+        "enabled": True,
+        "keep_last_n_runs": None,
+        "prune_old_capsules": False,
+        "revolution_retention": "preserve_all",
+    }
+    if raw is None:
+        return dict(defaults)
+    if not isinstance(raw, dict):
+        raise SpellValidationError("run_capsule must be an object when present")
+    out = dict(defaults)
+    out["enabled"] = bool(raw.get("enabled", True))
+    kln = raw.get("keep_last_n_runs")
+    if kln is not None:
+        out["keep_last_n_runs"] = int(kln)
+    out["prune_old_capsules"] = bool(raw.get("prune_old_capsules", False))
+    rr = raw.get("revolution_retention")
+    if rr is not None:
+        out["revolution_retention"] = str(rr)
+    return out
+
+
+def _format_revolution_capsule_id(capsule_index: int) -> str:
+    return f"rev_{capsule_index:04d}"
+
+
+def _next_run_sequence_index(ouroboros_runs_parent: Path) -> int:
+    ouroboros_runs_parent.mkdir(parents=True, exist_ok=True)
+    best = 0
+    for p in ouroboros_runs_parent.iterdir():
+        if not p.is_dir():
+            continue
+        m = re.match(r"^run_(\d{6})$", p.name)
+        if m:
+            best = max(best, int(m.group(1)))
+    return best + 1
+
+
+def _allocate_ouroboros_run_capsule(base_artifact_dir: Path) -> Tuple[str, Path, int]:
+    """Deterministic run_id run_NNNNNN under base_artifact_dir/ouroboros_runs/."""
+    parent = (base_artifact_dir / "ouroboros_runs").resolve()
+    seq = _next_run_sequence_index(parent)
+    run_id = f"run_{seq:06d}"
+    capsule = parent / run_id
+    capsule.mkdir(parents=True, exist_ok=True)
+    return run_id, capsule, seq
+
+
+def _maybe_prune_old_run_capsules(base_artifact_dir: Path, rc: Dict[str, Any]) -> None:
+    if not rc.get("prune_old_capsules"):
+        return
+    n = rc.get("keep_last_n_runs")
+    if not isinstance(n, int) or n <= 0:
+        return
+    parent = (base_artifact_dir / "ouroboros_runs").resolve()
+    if not parent.is_dir():
+        return
+    dirs = sorted(
+        [p for p in parent.iterdir() if p.is_dir() and re.match(r"^run_\d{6}$", p.name)],
+        key=lambda p: p.name,
+    )
+    if len(dirs) <= n:
+        return
+    for old in dirs[:-n]:
+        try:
+            shutil.rmtree(old, ignore_errors=True)
+        except OSError:
+            pass
+
+
+def _paths_relative_to_run_root(run_root: Path, paths: Dict[str, Path]) -> Dict[str, str]:
+    rr = run_root.resolve()
+    out: Dict[str, str] = {}
+    for key, p in paths.items():
+        try:
+            out[key] = Path(p).resolve().relative_to(rr).as_posix()
+        except ValueError:
+            out[key] = str(p)
+    return out
+
+
+def _review_bundle_fingerprint(reviewed_bundle: Optional[Dict[str, Any]]) -> Optional[str]:
+    if reviewed_bundle is None:
+        return None
+    return sha256_bytes(canonical_json(reviewed_bundle).encode("utf-8"))
+
+
+def write_ouroboros_run_manifest(
+    artifact_dir: Path,
+    spell_name: str,
+    manifest_doc: Dict[str, Any],
+) -> Tuple[Path, Path]:
+    raw_path = artifact_dir / f"{spell_name}.run_manifest.raw.json"
+    diff_path = artifact_dir / f"{spell_name}.run_manifest.json"
+    raw_path.write_text(canonical_json(manifest_doc), encoding="utf-8")
+    diff_path.write_text(
+        canonical_json(
+            normalize_paths_for_portability(json.loads(canonical_json(manifest_doc)), repo_root=ROOT)
+        ),
+        encoding="utf-8",
+    )
+    return diff_path, raw_path
+
+
 ACCEPTANCE_CONTRACT_KEYS = frozenset(
     {"primary_metric", "required_improvement", "guardrails", "tie_breakers", "reject_if"}
 )
@@ -559,6 +666,12 @@ def load_cycle_config(path: Path) -> Dict[str, Any]:
         raise SpellValidationError("cycle config score_channel_sensitive_paths must be a list of strings")
     block_sens = bool(raw.get("block_score_channel_sensitive_mutations", False))
 
+    lineage_pol = raw.get("lineage_policy")
+    if lineage_pol is not None and not isinstance(lineage_pol, dict):
+        raise SpellValidationError("lineage_policy must be an object when present")
+
+    run_capsule_cfg = _parse_run_capsule_config(raw.get("run_capsule"))
+
     min_imp = float(stop_conditions.get("min_improvement", 0.0))
     acceptance_contract = _parse_acceptance_contract(
         raw.get("acceptance_contract"),
@@ -590,6 +703,8 @@ def load_cycle_config(path: Path) -> Dict[str, Any]:
         "score_channel_sensitive_paths": list(sens),
         "block_score_channel_sensitive_mutations": block_sens,
         "acceptance_contract": acceptance_contract,
+        "lineage_policy": dict(lineage_pol or {}),
+        "run_capsule": run_capsule_cfg,
     }
 
 
@@ -822,9 +937,10 @@ def evaluate_acceptance_contract(
     last_accepted_revolution: Optional[int],
 ) -> Dict[str, Any]:
     """
-    Deterministic seal-stage acceptance (v1.6).
+    Deterministic seal-stage acceptance (v1.6+).
     Order: execution failure → reject_if (vs last accepted) → primary strict improvement
     (with guardrails) → equal-primary path with guardrails then tie_breakers.
+    v1.7: the chamber enriches each seal with baseline_reference_used_id (concrete baseline_ids).
     """
     pm_mode = str(contract.get("primary_metric", "maximize"))
     req_imp = float(contract.get("required_improvement", 0.0))
@@ -1045,6 +1161,80 @@ def _record_seal_acceptance_summary(summary: Dict[str, int], seal: Dict[str, Any
         summary["rejected_by_reject_if_non_score"] += 1
     else:
         summary["rejected_by_contract"] += 1
+
+
+def _format_baseline_id(logical_index: int) -> str:
+    """Deterministic baseline id for Ouroboros lineage (v1.7)."""
+    return f"bl_{logical_index:04d}"
+
+
+def _format_promotion_id(seq: int) -> str:
+    """Deterministic promotion record id (v1.7)."""
+    return f"pr_{seq:04d}"
+
+
+def _guardrail_metrics_snapshot(metrics: Dict[str, float], metric_paths_set: Set[str]) -> Dict[str, float]:
+    return {p: float(metrics.get(p, float("-inf"))) for p in sorted(metric_paths_set)}
+
+
+def _enrich_seal_baseline_reference_ids(
+    seal: Dict[str, Any],
+    *,
+    initial_baseline_id: str,
+    active_baseline_id: str,
+    last_accepted_baseline_id: Optional[str],
+) -> None:
+    """
+    Resolve acceptance-contract baseline labels to concrete baseline_ids (v1.7).
+    Mutates seal in place: adds baseline_reference_used_id alongside baseline_reference_used.
+    """
+    prev_accept_target = last_accepted_baseline_id if last_accepted_baseline_id is not None else initial_baseline_id
+    primary_id = active_baseline_id
+    gr_ids: Dict[str, str] = {}
+    for g in seal.get("guardrail_results") or []:
+        if not isinstance(g, dict):
+            continue
+        mp = str(g.get("metric_path", ""))
+        if not mp:
+            continue
+        src = str(g.get("baseline_source", ""))
+        if src == "initial_baseline":
+            gr_ids[mp] = initial_baseline_id
+        elif src == "best_so_far":
+            gr_ids[mp] = active_baseline_id
+        elif src == "previous_accepted":
+            gr_ids[mp] = prev_accept_target
+        else:
+            gr_ids[mp] = active_baseline_id
+    seal["baseline_reference_used_id"] = {
+        "primary": primary_id,
+        "guardrails": gr_ids,
+    }
+
+
+def _slim_seal_for_promotion(seal: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "decision": seal.get("decision"),
+        "reasons": list(seal.get("reasons") or []),
+        "primary_metric_result": seal.get("primary_metric_result"),
+        "tie_break_results": seal.get("tie_break_results"),
+        "reject_if_results": seal.get("reject_if_results"),
+        "baseline_reference_used": seal.get("baseline_reference_used"),
+        "baseline_reference_used_id": seal.get("baseline_reference_used_id"),
+    }
+
+
+def _lineage_summary_top(
+    baseline_registry: List[Dict[str, Any]],
+    promotion_records: List[Dict[str, Any]],
+    final_active_baseline_id: str,
+) -> Dict[str, Any]:
+    return {
+        "total_baselines_created": len(baseline_registry),
+        "total_promotions": len(promotion_records),
+        "final_active_baseline_id": final_active_baseline_id,
+        "superseded_baseline_count": sum(1 for r in baseline_registry if r.get("status") == "superseded"),
+    }
 
 
 def _predicted_capability_kinds_for_spell(spell: Spell) -> List[str]:
@@ -1578,13 +1768,37 @@ def ouroboros_chamber(
     enforce_review_bundle: bool,
 ) -> Dict[str, Any]:
     cfg = load_cycle_config(cycle_config_path)
+    run_capsule_cfg = cfg["run_capsule"]
+    base_artifact_dir = resolved.artifact_dir
+    if run_capsule_cfg["enabled"]:
+        run_id, art, started_logical_index = _allocate_ouroboros_run_capsule(base_artifact_dir)
+    else:
+        run_id = "legacy_flat"
+        art = base_artifact_dir
+        started_logical_index = 0
+    cycle_config_fingerprint = sha256_bytes(canonical_json(cfg).encode("utf-8"))
+    spell_fp = compute_spell_fingerprints(resolved.spell, resolved.policy_path, repo_root=ROOT)
+    spellbook_fp = compute_spellbook_fingerprints(resolved, repo_root=ROOT) if resolved.spellbook else {}
+    review_bundle_fp = _review_bundle_fingerprint(reviewed_bundle)
+    run_capsule_meta: Dict[str, Any] = {
+        "run_id": run_id,
+        "run_version": VERSION,
+        "started_at_logical_index": started_logical_index,
+        "artifact_root": str(art.resolve()),
+        "cycle_config_fingerprint": cycle_config_fingerprint,
+        "spell_fingerprints_required": spell_fp.get("required"),
+        "spellbook_fingerprints_required": (spellbook_fp.get("required") if spellbook_fp else None),
+        "review_bundle_fingerprint": review_bundle_fp,
+        "mode": "cycle",
+    }
+
     allowlist = cfg["mutation_target_allowlist"]
     max_rev = cfg["max_revolutions"]
     flux_budget = cfg["flux_budget"]
     plateau_window = cfg["plateau_window"]
     stop = cfg["stop_conditions"]
     metric_path = cfg["target_metric"]["path"]
-    metric_abs = str((resolved.artifact_dir / metric_path).resolve())
+    metric_abs = str((art / metric_path).resolve())
     recall_cfg = cfg["recall"]
     k_succ = recall_cfg["recent_k_successes"]
     k_fail = recall_cfg["recent_k_failures"]
@@ -1595,7 +1809,7 @@ def ouroboros_chamber(
     if not proposals:
         raise SpellValidationError("cycle config produced no proposals")
 
-    chamber_dir = resolved.artifact_dir / "ouroboros"
+    chamber_dir = art / "ouroboros"
     chamber_dir.mkdir(parents=True, exist_ok=True)
     # Isolate this run from leftover shadow spells (stale rev_*.spell.json confuses audits and disk usage).
     for stale in sorted(chamber_dir.glob("rev_*.spell.json")):
@@ -1629,14 +1843,14 @@ def ouroboros_chamber(
         approvals,
         simulate,
         resolved.policy_path,
-        resolved.artifact_dir,
+        art,
         reviewed_bundle=reviewed_bundle,
         enforce_review_bundle=enforce_review_bundle,
     )
     baseline_score = float("-inf")
     if baseline_result.get("status") == "succeeded":
         try:
-            baseline_score = _fixture_score(resolved.artifact_dir, metric_path)
+            baseline_score = _fixture_score(art, metric_path)
         except Exception:
             baseline_score = float("-inf")
     best_score = baseline_score
@@ -1646,7 +1860,7 @@ def ouroboros_chamber(
     for g in acc_contract.get("guardrails") or []:
         metric_paths_set.add(str(g["metric_path"]))
     initial_metrics: Dict[str, float] = {
-        p: _fixture_score_safe(resolved.artifact_dir, p) for p in sorted(metric_paths_set)
+        p: _fixture_score_safe(art, p) for p in sorted(metric_paths_set)
     }
     metrics_at_best: Dict[str, float] = dict(initial_metrics)
     metrics_at_last_accept: Dict[str, float] = dict(initial_metrics)
@@ -1661,6 +1875,34 @@ def ouroboros_chamber(
         "rejected_by_reject_if_non_score": 0,
     }
 
+    lineage_policy = cfg.get("lineage_policy") or {}
+    record_rejected_snapshots = bool(lineage_policy.get("record_rejected_snapshots", True))
+
+    baseline_seq = 0
+    promotion_seq = 0
+    baseline_registry: List[Dict[str, Any]] = []
+    promotion_records: List[Dict[str, Any]] = []
+    baseline_seq += 1
+    initial_baseline_id = _format_baseline_id(baseline_seq)
+    active_baseline_id = initial_baseline_id
+    last_accepted_baseline_id: Optional[str] = None
+
+    baseline_registry.append(
+        {
+            "baseline_id": initial_baseline_id,
+            "parent_baseline_id": None,
+            "created_at_logical_index": baseline_seq,
+            "source_revolution": 0,
+            "source_proposal_id": None,
+            "primary_metric_path": metric_path,
+            "primary_metric_value": float(baseline_score),
+            "guardrail_snapshot": _guardrail_metrics_snapshot(initial_metrics, metric_paths_set),
+            "admissibility_snapshot": None,
+            "score_channel_snapshot": None,
+            "status": "initial",
+        }
+    )
+
     plan_doc = plan_ouroboros_proposals(
         resolved,
         proposals=proposals,
@@ -1673,12 +1915,16 @@ def ouroboros_chamber(
         block_score_channel_sensitive_mutations=bool(cfg.get("block_score_channel_sensitive_mutations", False)),
     )
     proposal_plan_diff_path, proposal_plan_raw_path = write_ouroboros_proposal_plan(
-        resolved.artifact_dir,
+        art,
         resolved.spell.name,
         plan_doc,
     )
     ranked_list: List[Dict[str, Any]] = list(plan_doc["ranked_proposals"])
     preflight_skips: List[Dict[str, Any]] = []
+    revolution_capsules: List[Dict[str, Any]] = []
+    proposal_id_to_revolution_id: Dict[str, str] = {}
+    capsule_seq = 0
+    revolution_retention = str(run_capsule_cfg.get("revolution_retention") or "preserve_all")
 
     stop_reason = None
     prop_idx = 0
@@ -1724,6 +1970,22 @@ def ouroboros_chamber(
                         "score_channel_status": rec.get("score_channel_status"),
                     }
                 )
+                capsule_seq += 1
+                preflight_rid = _format_revolution_capsule_id(capsule_seq)
+                proposal_id_to_revolution_id[pid] = preflight_rid
+                revolution_capsules.append(
+                    {
+                        "revolution_id": preflight_rid,
+                        "revolution_index": capsule_seq,
+                        "parent_run_id": run_id,
+                        "artifact_root_relative": None,
+                        "proposal_id": pid,
+                        "mutation_family": rec.get("mutation_family"),
+                        "mutation_target": rec.get("mutation_target"),
+                        "executed": False,
+                        "skipped_reason": skip_reason,
+                    }
+                )
                 prop_idx += 1
                 continue
             break
@@ -1739,6 +2001,9 @@ def ouroboros_chamber(
         family = str(rec["mutation_family"])
         pid = str(rec["proposal_id"])
         ord_idx = int(rec["ordering_index"])
+        capsule_seq += 1
+        veil_revolution_id = _format_revolution_capsule_id(capsule_seq)
+        proposal_id_to_revolution_id[pid] = veil_revolution_id
 
         recall_snapshot = _ouroboros_recall_snapshot(
             recent_successes=recent_successes,
@@ -1772,6 +2037,19 @@ def ouroboros_chamber(
             rejected_ids.add(pid)
             rejected_mutation_count += 1
             no_improve += 1
+            revolution_capsules.append(
+                {
+                    "revolution_id": veil_revolution_id,
+                    "revolution_index": capsule_seq,
+                    "parent_run_id": run_id,
+                    "artifact_root_relative": None,
+                    "proposal_id": pid,
+                    "mutation_family": family,
+                    "mutation_target": mutation_path,
+                    "executed": False,
+                    "skipped_reason": "noop",
+                }
+            )
             if k_fail > 0:
                 recent_failures.append(
                     {
@@ -1785,6 +2063,8 @@ def ouroboros_chamber(
             revolutions.append(
                 {
                     "revolution": revolution,
+                    "revolution_id": veil_revolution_id,
+                    "artifact_root_relative": None,
                     "states": state_trace,
                     "mutation_family": family,
                     "mutation_target": mutation_path,
@@ -1810,9 +2090,13 @@ def ouroboros_chamber(
                         "capability_denials": None,
                     },
                     "seal_decision": None,
+                    "active_baseline_id": active_baseline_id,
                 }
             )
             continue
+
+        from_baseline_id = active_baseline_id
+        metrics_lineage_before = _guardrail_metrics_snapshot(metrics_at_best, metric_paths_set)
 
         _set_mutation(shadow_spell, mutation_path, choice, allowlist)
 
@@ -1846,6 +2130,11 @@ def ouroboros_chamber(
         }
         shadow_path.write_text(json.dumps(shadow_raw, indent=2, ensure_ascii=False), encoding="utf-8")
 
+        rev_rel = f"revolutions/{veil_revolution_id}"
+        rev_art = art / "revolutions" / veil_revolution_id
+        rev_art.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(shadow_path, rev_art / "shadow.spell.json")
+
         score_before = best_score
         attempted += 1
         exec_result = execute_spell(
@@ -1854,13 +2143,26 @@ def ouroboros_chamber(
             approvals,
             simulate,
             resolved.policy_path,
-            resolved.artifact_dir,
+            rev_art,
             reviewed_bundle=reviewed_bundle,
             enforce_review_bundle=enforce_review_bundle,
         )
+        revolution_capsules.append(
+            {
+                "revolution_id": veil_revolution_id,
+                "revolution_index": capsule_seq,
+                "parent_run_id": run_id,
+                "artifact_root_relative": rev_rel,
+                "proposal_id": pid,
+                "mutation_family": family,
+                "mutation_target": mutation_path,
+                "executed": True,
+                "skipped_reason": None,
+            }
+        )
         if exec_result.get("status") == "succeeded":
             try:
-                score = _fixture_score(resolved.artifact_dir, metric_path)
+                score = _fixture_score(art, metric_path)
             except Exception:
                 score = float("-inf")
         else:
@@ -1868,7 +2170,7 @@ def ouroboros_chamber(
 
         exec_ok = exec_result.get("status") == "succeeded"
         seal = evaluate_acceptance_contract(
-            artifact_dir=resolved.artifact_dir,
+            artifact_dir=art,
             contract=acc_contract,
             execution_succeeded=exec_ok,
             candidate_primary=score,
@@ -1883,22 +2185,69 @@ def ouroboros_chamber(
             revolution=revolution,
             last_accepted_revolution=last_accepted_revolution,
         )
+        contract_accept_reason = (seal.get("reasons") or ["contract_unknown"])[0]
+        _enrich_seal_baseline_reference_ids(
+            seal,
+            initial_baseline_id=initial_baseline_id,
+            active_baseline_id=active_baseline_id,
+            last_accepted_baseline_id=last_accepted_baseline_id,
+        )
         _record_seal_acceptance_summary(acceptance_summary, seal)
         accepted = seal.get("decision") == "accept"
-        accept_reject_reason = (seal.get("reasons") or ["contract_unknown"])[0]
+        accept_reject_reason = contract_accept_reason
         if accepted and cfg["require_approval_for_accept"] and "accept" not in approvals:
             accepted = False
             accept_reject_reason = "approval_required"
 
         if accepted:
+            old_active = active_baseline_id
+            for br in baseline_registry:
+                if br["baseline_id"] == old_active and br["status"] in ("initial", "active"):
+                    br["status"] = "superseded"
+                    break
             best_score = score
             best_spell = load_spell(shadow_path)
             best_ordering_index = ord_idx
             no_improve = 0
             accepted_mutation_count += 1
-            snap_m = {p: _fixture_score_safe(resolved.artifact_dir, p) for p in metric_paths_set}
+            snap_m = {p: _fixture_score_safe(art, p) for p in metric_paths_set}
             metrics_at_best = snap_m
             metrics_at_last_accept = dict(snap_m)
+            baseline_seq += 1
+            new_baseline_id = _format_baseline_id(baseline_seq)
+            gr_snap = _guardrail_metrics_snapshot(snap_m, metric_paths_set)
+            baseline_registry.append(
+                {
+                    "baseline_id": new_baseline_id,
+                    "parent_baseline_id": old_active,
+                    "created_at_logical_index": baseline_seq,
+                    "source_revolution": revolution,
+                    "source_proposal_id": pid,
+                    "primary_metric_path": metric_path,
+                    "primary_metric_value": float(score),
+                    "guardrail_snapshot": gr_snap,
+                    "admissibility_snapshot": {"admissibility_status": rec.get("admissibility_status")},
+                    "score_channel_snapshot": {"score_channel_status": rec.get("score_channel_status")},
+                    "status": "active",
+                }
+            )
+            promotion_seq += 1
+            promotion_records.append(
+                {
+                    "promotion_id": _format_promotion_id(promotion_seq),
+                    "from_baseline_id": from_baseline_id,
+                    "to_baseline_id": new_baseline_id,
+                    "proposal_id": pid,
+                    "promotion_reason": contract_accept_reason,
+                    "acceptance_decision_summary": _slim_seal_for_promotion(seal),
+                    "metrics_before": dict(sorted(metrics_lineage_before.items())),
+                    "metrics_after": dict(sorted(snap_m.items())),
+                    "guardrails_before": _guardrail_metrics_snapshot(metrics_lineage_before, metric_paths_set),
+                    "guardrails_after": gr_snap,
+                }
+            )
+            active_baseline_id = new_baseline_id
+            last_accepted_baseline_id = new_baseline_id
             last_accepted_rec = rec
             last_accepted_revolution = revolution
             if k_succ > 0:
@@ -1916,6 +2265,29 @@ def ouroboros_chamber(
             rejected_mutation_count += 1
             if accept_reject_reason != "approval_required":
                 rejected_ids.add(pid)
+            if (
+                record_rejected_snapshots
+                and exec_ok
+                and accept_reject_reason != "approval_required"
+            ):
+                cand_snap = {p: _fixture_score_safe(art, p) for p in metric_paths_set}
+                baseline_seq += 1
+                rej_snap_id = _format_baseline_id(baseline_seq)
+                baseline_registry.append(
+                    {
+                        "baseline_id": rej_snap_id,
+                        "parent_baseline_id": from_baseline_id,
+                        "created_at_logical_index": baseline_seq,
+                        "source_revolution": revolution,
+                        "source_proposal_id": pid,
+                        "primary_metric_path": metric_path,
+                        "primary_metric_value": float(score),
+                        "guardrail_snapshot": _guardrail_metrics_snapshot(cand_snap, metric_paths_set),
+                        "admissibility_snapshot": {"admissibility_status": rec.get("admissibility_status")},
+                        "score_channel_snapshot": {"score_channel_status": rec.get("score_channel_status")},
+                        "status": "rejected_candidate_snapshot",
+                    }
+                )
             if k_fail > 0:
                 recent_failures.append(
                     {
@@ -1932,6 +2304,8 @@ def ouroboros_chamber(
         revolutions.append(
             {
                 "revolution": revolution,
+                "revolution_id": veil_revolution_id,
+                "artifact_root_relative": rev_rel,
                 "states": state_trace,
                 "mutation_family": family,
                 "mutation_target": mutation_path,
@@ -1957,6 +2331,7 @@ def ouroboros_chamber(
                     "capability_denials": exec_result.get("blocked"),
                 },
                 "seal_decision": seal,
+                "active_baseline_id": active_baseline_id,
             }
         )
 
@@ -1971,6 +2346,38 @@ def ouroboros_chamber(
         accepted_mutation_count=accepted_mutation_count,
         rejected_mutation_count=rejected_mutation_count,
     )
+
+    lineage_summary = _lineage_summary_top(baseline_registry, promotion_records, active_baseline_id)
+
+    revolution_count_total = len(revolution_capsules)
+    revolution_count_executed = sum(1 for c in revolution_capsules if c.get("executed"))
+    revolution_count_skipped = revolution_count_total - revolution_count_executed
+    revolution_artifact_roots = [c.get("artifact_root_relative") for c in revolution_capsules]
+
+    run_capsule_meta["revolution_capsules"] = revolution_capsules
+    run_capsule_meta["proposal_id_to_revolution_id"] = proposal_id_to_revolution_id
+    run_capsule_meta["revolution_retention"] = revolution_retention
+    run_capsule_meta["revolution_count_total"] = revolution_count_total
+    run_capsule_meta["revolution_count_executed"] = revolution_count_executed
+    run_capsule_meta["revolution_count_skipped"] = revolution_count_skipped
+    run_capsule_meta["revolution_artifact_roots"] = revolution_artifact_roots
+
+    sn = resolved.spell.name
+    ouro_raw_path = art / f"{sn}.ouroboros.raw.json"
+    ouro_diff_path = art / f"{sn}.ouroboros.json"
+    key_paths_for_run: Dict[str, Path] = {
+        "ouroboros_witness_raw": ouro_raw_path,
+        "ouroboros_witness_diff": ouro_diff_path,
+        "proposal_plan_raw": proposal_plan_raw_path,
+        "proposal_plan_diff": proposal_plan_diff_path,
+    }
+    for cap in revolution_capsules:
+        rel = cap.get("artifact_root_relative")
+        if isinstance(rel, str) and rel:
+            rid = str(cap.get("revolution_id") or "")
+            if rid:
+                key_paths_for_run[f"revolution_root_{rid}"] = art / rel
+    key_artifact_paths_relative = _paths_relative_to_run_root(art, key_paths_for_run)
 
     witness = {
         "mode": "cycle",
@@ -1992,25 +2399,79 @@ def ouroboros_chamber(
         "score_channel_summary": plan_doc.get("score_channel_summary"),
         "acceptance_contract": acc_contract,
         "acceptance_summary": acceptance_summary,
+        "lineage_policy": lineage_policy,
+        "baseline_registry": baseline_registry,
+        "promotion_records": promotion_records,
+        "lineage_summary": lineage_summary,
+        "run_capsule": run_capsule_meta,
+        "revolution_capsules": revolution_capsules,
+        "proposal_id_to_revolution_id": proposal_id_to_revolution_id,
+        "revolution_count_total": revolution_count_total,
+        "revolution_count_executed": revolution_count_executed,
+        "revolution_count_skipped": revolution_count_skipped,
+        "revolution_artifact_roots": revolution_artifact_roots,
+        "key_artifact_paths_relative": key_artifact_paths_relative,
         "nondeterministic_fields": [],
     }
-    raw_path = resolved.artifact_dir / f"{resolved.spell.name}.ouroboros.raw.json"
-    diff_path = resolved.artifact_dir / f"{resolved.spell.name}.ouroboros.json"
-    raw_path.write_text(canonical_json(witness), encoding="utf-8")
-    diff_path.write_text(canonical_json(normalize_paths_for_portability(json.loads(canonical_json(witness)), repo_root=ROOT)), encoding="utf-8")
+    ouro_raw_path.write_text(canonical_json(witness), encoding="utf-8")
+    ouro_diff_path.write_text(
+        canonical_json(normalize_paths_for_portability(json.loads(canonical_json(witness)), repo_root=ROOT)),
+        encoding="utf-8",
+    )
+
+    manifest_doc: Dict[str, Any] = {
+        "run_capsule": run_capsule_meta,
+        "base_artifact_dir": str(base_artifact_dir.resolve()),
+        "stop_reason": stop_reason,
+        "lineage_summary": lineage_summary,
+        "acceptance_summary": acceptance_summary,
+        "promotion_record_count": len(promotion_records),
+        "final_active_baseline_id": lineage_summary["final_active_baseline_id"],
+        "ouroboros_witness_path": str(ouro_diff_path),
+        "ouroboros_witness_raw_path": str(ouro_raw_path),
+        "proposal_plan_path": str(proposal_plan_diff_path),
+        "proposal_plan_raw_path": str(proposal_plan_raw_path),
+        "key_artifact_paths_relative": key_artifact_paths_relative,
+        "run_manifest_path": str(art / f"{sn}.run_manifest.json"),
+        "run_manifest_raw_path": str(art / f"{sn}.run_manifest.raw.json"),
+        "revolution_capsules": revolution_capsules,
+        "proposal_id_to_revolution_id": proposal_id_to_revolution_id,
+        "revolution_count_total": revolution_count_total,
+        "revolution_count_executed": revolution_count_executed,
+        "revolution_count_skipped": revolution_count_skipped,
+        "revolution_artifact_roots": revolution_artifact_roots,
+    }
+    run_manifest_diff_path, run_manifest_raw_path = write_ouroboros_run_manifest(art, sn, manifest_doc)
+    _maybe_prune_old_run_capsules(base_artifact_dir, run_capsule_cfg)
+
     return {
         "mode": "cycle",
         "status": "completed",
         "stop_reason": stop_reason,
         "baseline_score": baseline_score,
         "best_score": best_score,
-        "ouroboros_witness_path": str(diff_path),
-        "ouroboros_witness_raw_path": str(raw_path),
+        "run_id": run_id,
+        "run_artifact_root": str(art.resolve()),
+        "base_artifact_dir": str(base_artifact_dir.resolve()),
+        "ouroboros_witness_path": str(ouro_diff_path),
+        "ouroboros_witness_raw_path": str(ouro_raw_path),
         "proposal_plan_path": str(proposal_plan_diff_path),
         "proposal_plan_raw_path": str(proposal_plan_raw_path),
+        "run_manifest_path": str(run_manifest_diff_path),
+        "run_manifest_raw_path": str(run_manifest_raw_path),
         "flux_attempts": attempted,
         "acceptance_contract": acc_contract,
         "acceptance_summary": acceptance_summary,
+        "lineage_policy": lineage_policy,
+        "baseline_registry": baseline_registry,
+        "promotion_records": promotion_records,
+        "lineage_summary": lineage_summary,
+        "revolution_capsules": revolution_capsules,
+        "proposal_id_to_revolution_id": proposal_id_to_revolution_id,
+        "revolution_count_total": revolution_count_total,
+        "revolution_count_executed": revolution_count_executed,
+        "revolution_count_skipped": revolution_count_skipped,
+        "revolution_artifact_roots": revolution_artifact_roots,
     }
 
 def sha256_bytes(data: bytes) -> str:

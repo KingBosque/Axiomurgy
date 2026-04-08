@@ -122,7 +122,7 @@ python axiomurgy.py spellbooks/primer_codex --approve publish \
   --review-bundle-in spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.review_bundle.json
 ```
 
-## Ouroboros Chamber (v1.6, optional)
+## Ouroboros Chamber (v1.8–v1.9, optional)
 
 Ouroboros Chamber is an **opt-in, bounded cyclic runner** for supervised iterative improvement.
 It does not replace normal execution; it runs only when `--cycle-config` is provided.
@@ -143,6 +143,12 @@ v1.2 adds selective **recall** snapshots (bounded recent successes/failures), ex
 **v1.5** adds deterministic **score-channel integrity** for `fixture_score`: it compares the metric file path (`target_metric.path`) to statically resolved `gate.file_write` targets. Proposals that **clearly** disconnect writes from the metric file are `inadmissible` before execution; ambiguous cases stay `uncertain`. `proposal_plan` includes `score_channel_contract`, per-proposal score-channel fields, and `score_channel_summary`; cycle witnesses echo the contract and summary. Optional cycle keys `score_channel_sensitive_paths` and `block_score_channel_sensitive_mutations` allow explicit operator bans on mutating named paths.
 
 **v1.6** adds an optional **`acceptance_contract`** on cycle configs: explicit primary metric direction, `required_improvement` (defaults align with legacy `min_improvement` when the block is omitted), **guardrails** on additional fixture-score paths, ordered **tie-breakers**, and mechanical **`reject_if`** checks versus the last accepted proposal. Acceptance is decided by a deterministic **seal** evaluator; each revolution records a **`seal_decision`**, and witnesses include the resolved contract plus an **`acceptance_summary`** (accept/reject counters).
+
+**v1.7** adds deterministic **baseline lineage**: a **`baseline_registry`** (machine-readable baseline records with parent links, logical ordering, metric and guardrail snapshots, admissibility/score-channel snapshots, and status), **`promotion_records`** on each accept (from/to baseline ids, proposal id, mechanical promotion reason, seal summary, metrics and guardrails before/after), **`baseline_reference_used_id`** on each **`seal_decision`** (concrete ids for primary and guardrail references), per-revolution **`active_baseline_id`**, and top-level **`lineage_summary`** counts. Optional **`lineage_policy`** (e.g. `record_rejected_snapshots`) is reserved for future contract hooks without changing seal math.
+
+**v1.8** adds **run capsules**: each cycle invocation allocates a deterministic **`run_id`** (`run_NNNNNN` under `<artifact-dir>/ouroboros_runs/`) and writes all Ouroboros outputs (metrics, proposal plans, shadow spells, witnesses, **`run_manifest`**) under that directory so repeated runs do not overwrite each other. Witnesses include **`run_capsule`** metadata (fingerprints, `artifact_root`) and **`key_artifact_paths_relative`**. Cycle JSON may set **`run_capsule.enabled: false`** for legacy flat layout under the base artifact dir; optional **`keep_last_n_runs`** / **`prune_old_capsules`** control safe retention (off by default).
+
+**v1.9** adds **revolution capsules** nested under the run capsule: each preflight skip or veil attempt gets a deterministic **`revolution_id`** (`rev_NNNN`). Executed revolutions write trace / prov / proofs / shadow copies under **`<run_root>/revolutions/rev_NNNN/`** so multiple revolutions in a single run do not overwrite each other (scoring stays on the run root via absolute `score_path`). Preflight-only skips get a lightweight capsule row (**`executed: false`**, **`skipped_reason`**) with **no** revolution artifact tree. Witnesses, **`run_manifest`**, and cycle results include **`revolution_capsules`**, **`proposal_id_to_revolution_id`**, **`revolution_count_*`**, and **`revolution_artifact_roots`**. Optional **`run_capsule.revolution_retention`** defaults to **`preserve_all`** for future pruning hooks (no deletion by default).
 
 Notes:
 - review bundles + attestation still apply when `--review-bundle-in` is provided

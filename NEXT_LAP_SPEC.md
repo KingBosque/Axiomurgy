@@ -1,6 +1,6 @@
 # Axiomurgy v1.1 target
 
-**Status:** Ouroboros v1.6 (optional acceptance contracts + deterministic seal evaluation + witness summaries) is implemented in the reference runtime; see `README.md` (Ouroboros section) for the current shape.
+**Status:** Ouroboros v1.9 (run capsules + per-revolution **`revolutions/rev_NNNN/`** artifact dirs + revolution capsule records in witness/manifest; plus v1.6–v1.7 acceptance and lineage) is implemented in the reference runtime; see `README.md` (Ouroboros section) for the current shape.
 
 ## Working title
 

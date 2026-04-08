@@ -18,6 +18,9 @@ What this lap adds:
 - Ouroboros Chamber (v1.4): **effect signatures** per proposal (mechanical plan/locus/capability shape), deterministic **diversified ranking** within admissibility tiers, `mutation_families` supports `flag` and `path_choice`
 - Ouroboros Chamber (v1.5): **score-channel integrity** — static comparison of `target_metric.path` to resolved `gate.file_write` destinations; **clear-break** disconnects are `inadmissible`; otherwise `uncertain`; optional `score_channel_sensitive_paths` / `block_score_channel_sensitive_mutations`
 - Ouroboros Chamber (v1.6): optional **`acceptance_contract`** (guardrails, tie-break chain, `reject_if` vs last accept), deterministic seal evaluation, per-revolution **`seal_decision`**, witness **`acceptance_summary`**
+- Ouroboros Chamber (v1.7): **`baseline_registry`**, **`promotion_records`**, **`lineage_summary`**, seal **`baseline_reference_used_id`**, per-revolution **`active_baseline_id`**; optional **`lineage_policy`**
+- Ouroboros Chamber (v1.8): **`run_id`**, per-run **`artifact_root`** under **`ouroboros_runs/`**, **`run_manifest`**, witness **`run_capsule`**; optional **`run_capsule`** retention flags
+- Ouroboros Chamber (v1.9): **`revolution_capsules`** (nested under **`run_capsule`**), per-revolution artifact roots **`revolutions/rev_NNNN/`** for executed veil attempts, **`proposal_id_to_revolution_id`**, revolution counts on witness / manifest / cycle result; preflight skips get capsule rows only; optional **`revolution_retention`** (default preserve all)
 
 Verified demos in this relay:
 - `python axiomurgy.py spellbooks/primer_codex --describe`

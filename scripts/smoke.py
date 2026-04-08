@@ -115,6 +115,11 @@ def main() -> int:
     assert any(item.get("accepted") for item in witness.get("revolutions", []))
     assert any(item.get("rejected") for item in witness.get("revolutions", []))
     assert Path(cycle_result["ouroboros_witness_raw_path"]).exists()
+    assert cycle_result.get("run_id")
+    assert cycle_result.get("run_artifact_root")
+    assert cycle_result.get("run_manifest_path")
+    assert "run_capsule" in witness
+    assert Path(cycle_result["run_manifest_path"]).exists()
 
     # 2e) Ouroboros v1.2: recall + mutation families (enum / numeric / string), deterministic proposals.
     cycle_v12 = ROOT / "examples" / "cycles" / "ouroboros_cycle_v12.json"
@@ -280,9 +285,11 @@ def main() -> int:
     )
     res_v16 = run_json(["examples/ouroboros_score_fixture.spell.json", "--cycle-config", str(cycle_v16_accept)])
     wit_v16 = json.loads(Path(res_v16["ouroboros_witness_path"]).read_text(encoding="utf-8"))
+    wit_v16_raw = json.loads(Path(res_v16["ouroboros_witness_raw_path"]).read_text(encoding="utf-8"))
     assert wit_v16.get("acceptance_contract", {}).get("primary_metric") == "maximize"
     assert "accepted_by_contract" in wit_v16.get("acceptance_summary", {})
     assert any(r.get("seal_decision") for r in wit_v16.get("revolutions", []))
+    assert wit_v16_raw["lineage_summary"]["final_active_baseline_id"] == wit_v16["lineage_summary"]["final_active_baseline_id"]
     cycle_v16_guard = Path(tempfile.gettempdir()) / "axiomurgy_cycle_config_v16_guard.json"
     cycle_v16_guard.write_text(
         json.dumps(
@@ -313,6 +320,128 @@ def main() -> int:
     res_v16g = run_json(["examples/ouroboros_score_fixture.spell.json", "--cycle-config", str(cycle_v16_guard)])
     wit_v16g = json.loads(Path(res_v16g["ouroboros_witness_path"]).read_text(encoding="utf-8"))
     assert wit_v16g.get("acceptance_summary", {}).get("rejected_by_guardrail", 0) >= 1
+
+    # 2j) Ouroboros v1.7: baseline registry, promotions, deterministic lineage ids (diffable + raw).
+    assert "baseline_registry" in witness and "promotion_records" in witness and "lineage_summary" in witness
+    assert witness["baseline_registry"][0]["baseline_id"] == "bl_0001"
+    assert witness["lineage_summary"]["final_active_baseline_id"].startswith("bl_")
+    assert wit_v16["lineage_summary"]["total_baselines_created"] >= 2
+    assert wit_v16["lineage_summary"]["total_promotions"] >= 1
+    assert wit_v16["promotion_records"][0]["from_baseline_id"] == "bl_0001"
+    for r in wit_v16.get("revolutions", []):
+        if r.get("seal_decision"):
+            assert "baseline_reference_used_id" in r["seal_decision"]
+    cycle_v17_reject = Path(tempfile.gettempdir()) / "axiomurgy_cycle_config_v17_reject.json"
+    cycle_v17_reject.write_text(
+        json.dumps(
+            {
+                "max_revolutions": 1,
+                "flux_budget": 1,
+                "plateau_window": 2,
+                "target_metric": {"kind": "fixture_score", "path": "ouroboros_score.json"},
+                "mutation_target_allowlist": ["spell.inputs.score"],
+                "mutation_targets": [{"path": "spell.inputs.score", "choices": [0.1]}],
+                "rollback_mode": "shadow_copy",
+                "stop_conditions": {"max_failures": 1, "min_improvement": 0.0, "no_improve_for": 2},
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    res_v17r = run_json(["examples/ouroboros_score_fixture.spell.json", "--cycle-config", str(cycle_v17_reject)])
+    wit_v17r = json.loads(Path(res_v17r["ouroboros_witness_path"]).read_text(encoding="utf-8"))
+    assert wit_v17r["lineage_summary"]["total_promotions"] == 0
+    assert wit_v17r["lineage_summary"]["final_active_baseline_id"] == "bl_0001"
+
+    # 2k) Ouroboros v1.8: two cycle runs under the same --artifact-dir use distinct run_id / capsule roots.
+    smoke_adir = Path(tempfile.gettempdir()) / "axiomurgy_smoke_v18_runs"
+    smoke_adir.mkdir(parents=True, exist_ok=True)
+    cr_a = run_json(
+        [
+            "examples/ouroboros_score_fixture.spell.json",
+            "--artifact-dir",
+            str(smoke_adir),
+            "--cycle-config",
+            str(cycle_v17_reject),
+        ]
+    )
+    cr_b = run_json(
+        [
+            "examples/ouroboros_score_fixture.spell.json",
+            "--artifact-dir",
+            str(smoke_adir),
+            "--cycle-config",
+            str(cycle_v17_reject),
+        ]
+    )
+    assert cr_a["run_id"] != cr_b["run_id"]
+    assert cr_a["run_artifact_root"] != cr_b["run_artifact_root"]
+    mf_a = json.loads(Path(cr_a["run_manifest_path"]).read_text(encoding="utf-8"))
+    assert mf_a.get("run_capsule", {}).get("run_id") == cr_a["run_id"]
+    assert Path(cr_a["ouroboros_witness_path"]).exists() and Path(cr_b["ouroboros_witness_path"]).exists()
+
+    # 2l) Ouroboros v1.9: multiple revolutions in one run use distinct revolution artifact dirs; witness + manifest list capsules.
+    cycle_v19 = Path(tempfile.gettempdir()) / "axiomurgy_cycle_config_v19.json"
+    cycle_v19.write_text(
+        json.dumps(
+            {
+                "max_revolutions": 3,
+                "flux_budget": 3,
+                "plateau_window": 2,
+                "target_metric": {"kind": "fixture_score", "path": "ouroboros_score.json"},
+                "mutation_target_allowlist": ["spell.inputs.score"],
+                "mutation_targets": [{"path": "spell.inputs.score", "choices": [2.0, 0.0, 3.0]}],
+                "rollback_mode": "shadow_copy",
+                "stop_conditions": {"max_failures": 3, "min_improvement": 0.0, "no_improve_for": 2},
+            },
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    cr_v19 = run_json(["examples/ouroboros_score_fixture.spell.json", "--cycle-config", str(cycle_v19)])
+    assert cr_v19.get("revolution_count_total", 0) >= 1
+    assert cr_v19.get("revolution_count_executed", 0) + cr_v19.get("revolution_count_skipped", 0) == cr_v19[
+        "revolution_count_total"
+    ]
+    wit_v19 = json.loads(Path(cr_v19["ouroboros_witness_path"]).read_text(encoding="utf-8"))
+    assert wit_v19.get("revolution_capsules")
+    assert wit_v19["run_capsule"].get("revolution_capsules")
+    mf_v19 = json.loads(Path(cr_v19["run_manifest_path"]).read_text(encoding="utf-8"))
+    assert mf_v19.get("revolution_capsules") and mf_v19.get("proposal_id_to_revolution_id") is not None
+    run_root = Path(cr_v19["run_artifact_root"])
+    rev_dirs = sorted([p for p in (run_root / "revolutions").iterdir() if p.is_dir()]) if (run_root / "revolutions").is_dir() else []
+    assert len(rev_dirs) >= 2
+    trace_a = rev_dirs[0] / "ouroboros_score_fixture.trace.json"
+    trace_b = rev_dirs[1] / "ouroboros_score_fixture.trace.json"
+    assert trace_a.exists() and trace_b.exists()
+    assert trace_a.resolve() != trace_b.resolve()
+    skipped_caps = [c for c in wit_v19["revolution_capsules"] if not c.get("executed")]
+    for c in skipped_caps:
+        assert c.get("artifact_root_relative") is None
+    shrunk_v19 = run_json(["examples/ouroboros_score_fixture.spell.json", "--review-bundle"])
+    shrunk_v19["capabilities"] = dict(shrunk_v19.get("capabilities") or {})
+    shrunk_v19["capabilities"]["envelope"] = dict((shrunk_v19["capabilities"].get("envelope") or {}))
+    kinds_v19 = list(shrunk_v19["capabilities"]["envelope"].get("kinds") or [])
+    shrunk_v19["capabilities"]["envelope"]["kinds"] = [k for k in kinds_v19 if k != "filesystem.write"]
+    shrunk_v19_path = Path(tempfile.gettempdir()) / "axiomurgy_review_bundle_v19_shrunk.json"
+    shrunk_v19_path.write_text(json.dumps(shrunk_v19, indent=2, ensure_ascii=False), encoding="utf-8")
+    cr_skip = run_json(
+        [
+            "examples/ouroboros_score_fixture.spell.json",
+            "--cycle-config",
+            str(cycle_v19),
+            "--review-bundle-in",
+            str(shrunk_v19_path),
+        ]
+    )
+    wit_skip_v19 = json.loads(Path(cr_skip["ouroboros_witness_path"]).read_text(encoding="utf-8"))
+    assert wit_skip_v19["flux_attempts"] == 0
+    assert all(not c.get("executed") for c in wit_skip_v19["revolution_capsules"])
+    skip_root = Path(cr_skip["run_artifact_root"])
+    if (skip_root / "revolutions").is_dir():
+        assert not list((skip_root / "revolutions").iterdir())
 
     # 3) Rollback demo (OpenAPI) + raw+diff artifacts
     with tempfile.TemporaryDirectory() as tmpdir:
