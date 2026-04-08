@@ -251,6 +251,253 @@ class AxiomurgyRuntimeTests(unittest.TestCase):
                     enforce_review_bundle=False,
                 )
 
+    def test_cycle_config_rejects_both_mutation_families_and_targets(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = Path(tmpdir) / "cycle.json"
+            cfg_path.write_text(
+                json.dumps(
+                    {
+                        "max_revolutions": 1,
+                        "flux_budget": 1,
+                        "plateau_window": 1,
+                        "target_metric": {"kind": "fixture_score", "path": "x.json"},
+                        "mutation_target_allowlist": ["spell.inputs.score"],
+                        "mutation_targets": [{"path": "spell.inputs.score", "choices": [1.0]}],
+                        "mutation_families": [
+                            {"family": "enum", "path": "spell.inputs.score", "candidates": [1.0]}
+                        ],
+                        "stop_conditions": {"max_failures": 1, "min_improvement": 0.0, "no_improve_for": 1},
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaises(self.runtime.SpellValidationError):
+                self.runtime.load_cycle_config(cfg_path)
+
+    def test_expand_cycle_proposals_order_and_proposal_ids_stable(self):
+        cfg = self.runtime.load_cycle_config(ROOT / "examples" / "cycles" / "ouroboros_cycle_v12.json")
+        p1 = self.runtime.expand_cycle_proposals(cfg)
+        p2 = self.runtime.expand_cycle_proposals(cfg)
+        self.assertEqual(len(p1), 6)
+        self.assertEqual(p1, p2)
+        self.assertEqual([p["ordering_index"] for p in p1], list(range(6)))
+        ids = [p["proposal_id"] for p in p1]
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_ouroboros_recall_bounded_and_top_level_recall(self):
+        resolved = self.runtime.resolve_run_target(
+            ROOT / "examples" / "ouroboros_score_fixture_v12.spell.json", None, None, None
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolved.artifact_dir = Path(tmpdir)
+            result = self.runtime.ouroboros_chamber(
+                resolved,
+                cycle_config_path=ROOT / "examples" / "cycles" / "ouroboros_cycle_v12.json",
+                approvals=set(),
+                simulate=False,
+                reviewed_bundle=None,
+                enforce_review_bundle=False,
+            )
+            witness = json.loads(Path(result["ouroboros_witness_path"]).read_text(encoding="utf-8"))
+            self.assertIn("recall", witness)
+            rec = witness["recall"]
+            self.assertIn("best_score_so_far", rec)
+            self.assertLessEqual(len(rec["recent_k_successes"]), 2)
+            self.assertLessEqual(len(rec["recent_k_failures"]), 2)
+            for rev in witness.get("revolutions", []):
+                self.assertIn("recall_snapshot", rev)
+                self.assertIn("proposal_id", rev)
+                self.assertIn("score_before", rev)
+                self.assertIn("score_after", rev)
+                self.assertIn("accept_reject_reason", rev)
+
+    def test_ouroboros_diffable_witness_no_windows_paths(self):
+        resolved = self.runtime.resolve_run_target(
+            ROOT / "examples" / "ouroboros_score_fixture_v12.spell.json", None, None, None
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolved.artifact_dir = Path(tmpdir)
+            result = self.runtime.ouroboros_chamber(
+                resolved,
+                cycle_config_path=ROOT / "examples" / "cycles" / "ouroboros_cycle_v12.json",
+                approvals=set(),
+                simulate=False,
+                reviewed_bundle=None,
+                enforce_review_bundle=False,
+            )
+            diff_text = Path(result["ouroboros_witness_path"]).read_text(encoding="utf-8")
+            self.assertNotRegex(diff_text, r"[A-Za-z]:\\\\")
+
+    def test_ouroboros_enforce_review_bundle_blocks_overreach(self):
+        resolved = self.runtime.resolve_run_target(
+            ROOT / "examples" / "ouroboros_score_fixture.spell.json", None, None, None
+        )
+        reviewed = self.runtime.build_review_bundle(resolved)
+        reviewed["capabilities"]["envelope"]["kinds"] = [
+            k for k in reviewed["capabilities"]["envelope"]["kinds"] if k != "filesystem.write"
+        ]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolved.artifact_dir = Path(tmpdir)
+            cfg = {
+                "max_revolutions": 1,
+                "flux_budget": 1,
+                "plateau_window": 1,
+                "target_metric": {"kind": "fixture_score", "path": "ouroboros_score.json"},
+                "mutation_target_allowlist": ["spell.inputs.score"],
+                "mutation_targets": [{"path": "spell.inputs.score", "choices": [2.0]}],
+                "rollback_mode": "shadow_copy",
+                "stop_conditions": {"max_failures": 1, "min_improvement": 0.0, "no_improve_for": 1},
+            }
+            cfg_path = Path(tmpdir) / "cycle.json"
+            cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+            result = self.runtime.ouroboros_chamber(
+                resolved,
+                cycle_config_path=cfg_path,
+                approvals=set(),
+                simulate=False,
+                reviewed_bundle=reviewed,
+                enforce_review_bundle=True,
+            )
+            self.assertEqual(result["mode"], "cycle")
+            witness = json.loads(Path(result["ouroboros_witness_path"]).read_text(encoding="utf-8"))
+            rev0 = witness["revolutions"][0]
+            self.assertEqual(rev0["execution_result"]["status"], "failed")
+            self.assertTrue((rev0.get("execution_result") or {}).get("capability_denials"))
+
+    def test_ouroboros_skips_linear_rejected_without_retry(self):
+        """Rejected proposal_id is never attempted again in the same run (linear list)."""
+        resolved = self.runtime.resolve_run_target(
+            ROOT / "examples" / "ouroboros_score_fixture.spell.json", None, None, None
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolved.artifact_dir = Path(tmpdir)
+            cfg = {
+                "max_revolutions": 10,
+                "flux_budget": 10,
+                "plateau_window": 10,
+                "target_metric": {"kind": "fixture_score", "path": "ouroboros_score.json"},
+                "mutation_target_allowlist": ["spell.inputs.score"],
+                "mutation_targets": [{"path": "spell.inputs.score", "choices": [0.0, 2.0]}],
+                "rollback_mode": "shadow_copy",
+                "stop_conditions": {"max_failures": 10, "min_improvement": 0.0, "no_improve_for": 10},
+            }
+            cfg_path = Path(tmpdir) / "cycle.json"
+            cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+            self.runtime.ouroboros_chamber(
+                resolved,
+                cycle_config_path=cfg_path,
+                approvals=set(),
+                simulate=False,
+                reviewed_bundle=None,
+                enforce_review_bundle=False,
+            )
+            props = self.runtime.expand_cycle_proposals(self.runtime.load_cycle_config(cfg_path))
+            pid_bad = props[0]["proposal_id"]
+            witness = json.loads(
+                (Path(tmpdir) / f"{resolved.spell.name}.ouroboros.json").read_text(encoding="utf-8")
+            )
+            n_bad = sum(1 for r in witness["revolutions"] if r.get("proposal_id") == pid_bad)
+            self.assertEqual(n_bad, 1)
+
+    def test_proposal_id_unifies_int_and_float_candidates(self):
+        a = self.runtime.proposal_id("enum", "spell.inputs.score", 1)
+        b = self.runtime.proposal_id("enum", "spell.inputs.score", 1.0)
+        self.assertEqual(a, b)
+
+    def test_expand_cycle_proposals_dedupes_identical_proposal_ids(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = Path(tmpdir) / "cycle.json"
+            cfg_path.write_text(
+                json.dumps(
+                    {
+                        "max_revolutions": 4,
+                        "flux_budget": 4,
+                        "plateau_window": 2,
+                        "target_metric": {"kind": "fixture_score", "path": "x.json"},
+                        "mutation_target_allowlist": ["spell.inputs.score"],
+                        "mutation_targets": [
+                            {"path": "spell.inputs.score", "choices": [2.0, 2.0, 1, 1.0]}
+                        ],
+                        "stop_conditions": {"max_failures": 4, "min_improvement": 0.0, "no_improve_for": 4},
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            cfg = self.runtime.load_cycle_config(cfg_path)
+            props = self.runtime.expand_cycle_proposals(cfg)
+        self.assertEqual(len(props), 2)
+        self.assertEqual(len({p["proposal_id"] for p in props}), 2)
+
+    def test_ouroboros_chamber_removes_stale_shadow_spells(self):
+        resolved = self.runtime.resolve_run_target(
+            ROOT / "examples" / "ouroboros_score_fixture.spell.json", None, None, None
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolved.artifact_dir = Path(tmpdir)
+            chamber = resolved.artifact_dir / "ouroboros"
+            chamber.mkdir(parents=True, exist_ok=True)
+            stale = chamber / "rev_099.spell.json"
+            stale.write_text("{}", encoding="utf-8")
+            cfg = {
+                "max_revolutions": 1,
+                "flux_budget": 1,
+                "plateau_window": 2,
+                "target_metric": {"kind": "fixture_score", "path": "ouroboros_score.json"},
+                "mutation_target_allowlist": ["spell.inputs.score"],
+                "mutation_targets": [{"path": "spell.inputs.score", "choices": [2.0]}],
+                "rollback_mode": "shadow_copy",
+                "stop_conditions": {"max_failures": 2, "min_improvement": 0.0, "no_improve_for": 2},
+            }
+            cfg_path = Path(tmpdir) / "cycle.json"
+            cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+            self.runtime.ouroboros_chamber(
+                resolved,
+                cycle_config_path=cfg_path,
+                approvals=set(),
+                simulate=False,
+                reviewed_bundle=None,
+                enforce_review_bundle=False,
+            )
+            self.assertFalse(stale.exists())
+            self.assertTrue((chamber / "rev_001.spell.json").exists())
+
+    def test_ouroboros_diffable_witness_config_path_is_portable(self):
+        resolved = self.runtime.resolve_run_target(
+            ROOT / "examples" / "ouroboros_score_fixture.spell.json", None, None, None
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg_path = Path(tmpdir) / "cycle.json"
+            cfg_path.write_text(
+                json.dumps(
+                    {
+                        "max_revolutions": 1,
+                        "flux_budget": 1,
+                        "plateau_window": 2,
+                        "target_metric": {"kind": "fixture_score", "path": "ouroboros_score.json"},
+                        "mutation_target_allowlist": ["spell.inputs.score"],
+                        "mutation_targets": [{"path": "spell.inputs.score", "choices": [1.0]}],
+                        "rollback_mode": "shadow_copy",
+                        "stop_conditions": {"max_failures": 2, "min_improvement": 0.0, "no_improve_for": 2},
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            resolved.artifact_dir = Path(tmpdir)
+            result = self.runtime.ouroboros_chamber(
+                resolved,
+                cycle_config_path=cfg_path.resolve(),
+                approvals=set(),
+                simulate=False,
+                reviewed_bundle=None,
+                enforce_review_bundle=False,
+            )
+            diff = json.loads(Path(result["ouroboros_witness_path"]).read_text(encoding="utf-8"))
+            cfg_out = diff.get("config_path", "")
+            self.assertTrue(cfg_out.startswith("repo:") or cfg_out == "<opaque_path>")
+
     def test_diffable_witness_trace_omits_timestamps_and_raw_preserves_them(self):
         spell = self.runtime.load_spell(ROOT / "examples" / "primer_to_axioms.spell.json")
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -122,7 +122,7 @@ python axiomurgy.py spellbooks/primer_codex --approve publish \
   --review-bundle-in spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.review_bundle.json
 ```
 
-## Ouroboros Chamber (v1.1, optional)
+## Ouroboros Chamber (v1.2, optional)
 
 Ouroboros Chamber is an **opt-in, bounded cyclic runner** for supervised iterative improvement.
 It does not replace normal execution; it runs only when `--cycle-config` is provided.
@@ -133,6 +133,8 @@ Example:
 python axiomurgy.py examples/ouroboros_score_fixture.spell.json \
   --cycle-config path/to/cycle.json
 ```
+
+v1.2 adds selective **recall** snapshots (bounded recent successes/failures), explicit **mutation families** (`enum`, `numeric`, `string`) with deterministic **proposal_id** ordering, optional **reject_on_noop**, and richer cycle witnesses. Legacy v1.1 configs using `mutation_targets` / `choices` remain valid; do not mix `mutation_families` and `mutation_targets` in one file.
 
 Notes:
 - review bundles + attestation still apply when `--review-bundle-in` is provided

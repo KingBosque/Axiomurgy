@@ -1,0 +1,31 @@
+{
+  "spell": "ouroboros_score_fixture_v12",
+  "intent": "v1.2 Ouroboros demo: score from inputs plus an extra numeric graph arg for mutation-family coverage.",
+  "inputs": {
+    "score": 1.0,
+    "score_path": "artifacts/ouroboros_score.json",
+    "note": "seed"
+  },
+  "constraints": {
+    "risk": "low"
+  },
+  "graph": [
+    {
+      "id": "write_score",
+      "rune": "gate.file_write",
+      "effect": "write",
+      "args": {
+        "from": {
+          "score": "$inputs.score",
+          "note": "$inputs.note"
+        },
+        "path": "$inputs.score_path",
+        "mult": 1.0
+      }
+    }
+  ],
+  "rollback": [],
+  "witness": {
+    "record": true
+  }
+}

@@ -12,7 +12,7 @@ import shlex
 import subprocess
 import sys
 import uuid
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,7 +22,7 @@ import jsonschema
 import requests
 import yaml
 
-VERSION = "1.0.0"
+VERSION = "1.2.0"
 ROOT = Path(__file__).resolve().parent
 DEFAULT_POLICY_PATH = ROOT / "policies" / "default.policy.json"
 DEFAULT_SCHEMA_PATH = ROOT / "spell.schema.json"
@@ -371,23 +371,70 @@ def load_cycle_config(path: Path) -> Dict[str, Any]:
         raise SpellValidationError("cycle config stop_conditions must be an object")
     metric = raw.get("target_metric", {}) or {}
     if not isinstance(metric, dict) or metric.get("kind") != "fixture_score":
-        raise SpellValidationError("cycle config target_metric.kind must be 'fixture_score' for v1.1")
+        raise SpellValidationError("cycle config target_metric.kind must be 'fixture_score'")
     metric_path = metric.get("path")
     if not isinstance(metric_path, str) or not metric_path:
         raise SpellValidationError("cycle config target_metric.path must be a non-empty string")
     allowlist = raw.get("mutation_target_allowlist", []) or []
     if not isinstance(allowlist, list) or not all(isinstance(x, str) for x in allowlist):
         raise SpellValidationError("cycle config mutation_target_allowlist must be a list of strings")
+
+    recall_raw = raw.get("recall", {}) or {}
+    if not isinstance(recall_raw, dict):
+        raise SpellValidationError("cycle config recall must be an object")
+    recent_k_successes = int(recall_raw.get("recent_k_successes", 3))
+    recent_k_failures = int(recall_raw.get("recent_k_failures", 3))
+    if recent_k_successes < 0 or recent_k_failures < 0:
+        raise SpellValidationError("cycle config recall recent_k_* must be non-negative integers")
+
+    tie_break = str(raw.get("tie_break", "prefer_lower_ordering_index"))
+    if tie_break not in ("prefer_higher_ordering_index", "prefer_lower_ordering_index"):
+        raise SpellValidationError(
+            "cycle config tie_break must be 'prefer_higher_ordering_index' or 'prefer_lower_ordering_index'"
+        )
+    reject_on_noop = bool(raw.get("reject_on_noop", False))
+
     targets = raw.get("mutation_targets", []) or []
-    if not isinstance(targets, list) or not targets:
-        raise SpellValidationError("cycle config mutation_targets must be a non-empty list")
-    for item in targets:
-        if not isinstance(item, dict):
-            raise SpellValidationError("cycle config mutation_targets entries must be objects")
-        if not isinstance(item.get("path"), str) or not item["path"]:
-            raise SpellValidationError("cycle config mutation_targets[].path must be a non-empty string")
-        if not isinstance(item.get("choices"), list) or not item["choices"]:
-            raise SpellValidationError("cycle config mutation_targets[].choices must be a non-empty list")
+    families = raw.get("mutation_families", []) or []
+    if not isinstance(targets, list):
+        raise SpellValidationError("cycle config mutation_targets must be a list")
+    if not isinstance(families, list):
+        raise SpellValidationError("cycle config mutation_families must be a list")
+    if families and targets:
+        raise SpellValidationError(
+            "cycle config must not set both mutation_families and mutation_targets; use one or the other"
+        )
+    if families:
+        for item in families:
+            if not isinstance(item, dict):
+                raise SpellValidationError("cycle config mutation_families entries must be objects")
+            fam = item.get("family")
+            if fam not in ("enum", "numeric", "string"):
+                raise SpellValidationError("cycle config mutation_families[].family must be enum, numeric, or string")
+            if not isinstance(item.get("path"), str) or not item["path"]:
+                raise SpellValidationError("cycle config mutation_families[].path must be a non-empty string")
+            cands = item.get("candidates")
+            if not isinstance(cands, list) or not cands:
+                raise SpellValidationError("cycle config mutation_families[].candidates must be a non-empty list")
+            if fam == "numeric":
+                for c in cands:
+                    if isinstance(c, bool) or not isinstance(c, (int, float)):
+                        raise SpellValidationError("cycle config numeric family candidates must be numbers")
+            elif fam == "string":
+                for c in cands:
+                    if not isinstance(c, str):
+                        raise SpellValidationError("cycle config string family candidates must be strings")
+    elif targets:
+        for item in targets:
+            if not isinstance(item, dict):
+                raise SpellValidationError("cycle config mutation_targets entries must be objects")
+            if not isinstance(item.get("path"), str) or not item["path"]:
+                raise SpellValidationError("cycle config mutation_targets[].path must be a non-empty string")
+            if not isinstance(item.get("choices"), list) or not item["choices"]:
+                raise SpellValidationError("cycle config mutation_targets[].choices must be a non-empty list")
+    else:
+        raise SpellValidationError("cycle config requires non-empty mutation_families or mutation_targets")
+
     return {
         "max_revolutions": max_rev,
         "flux_budget": flux_budget,
@@ -397,12 +444,84 @@ def load_cycle_config(path: Path) -> Dict[str, Any]:
         "require_approval_for_accept": bool(raw.get("require_approval_for_accept", False)),
         "mutation_target_allowlist": list(allowlist),
         "mutation_targets": targets,
+        "mutation_families": families,
+        "recall": {
+            "recent_k_successes": recent_k_successes,
+            "recent_k_failures": recent_k_failures,
+        },
+        "tie_break": tie_break,
+        "reject_on_noop": reject_on_noop,
         "stop_conditions": {
             "max_failures": int(stop_conditions.get("max_failures", max_rev)),
             "min_improvement": float(stop_conditions.get("min_improvement", 0.0)),
             "no_improve_for": int(stop_conditions.get("no_improve_for", plateau_window)),
         },
     }
+
+
+def expand_cycle_proposals(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Deterministic ordered list of mutation proposals (family, path, candidate)."""
+    out: List[Dict[str, Any]] = []
+    ordering_index = 0
+    if cfg.get("mutation_families"):
+        for item in cfg["mutation_families"]:
+            fam = str(item["family"])
+            path = str(item["path"])
+            for candidate in item["candidates"]:
+                pid = proposal_id(fam, path, candidate)
+                out.append(
+                    {
+                        "ordering_index": ordering_index,
+                        "family": fam,
+                        "path": path,
+                        "candidate": candidate,
+                        "proposal_id": pid,
+                    }
+                )
+                ordering_index += 1
+    else:
+        for item in cfg["mutation_targets"]:
+            path = str(item["path"])
+            for candidate in item["choices"]:
+                pid = proposal_id("enum", path, candidate)
+                out.append(
+                    {
+                        "ordering_index": ordering_index,
+                        "family": "enum",
+                        "path": path,
+                        "candidate": candidate,
+                        "proposal_id": pid,
+                    }
+                )
+                ordering_index += 1
+    out.sort(key=lambda p: p["ordering_index"])
+    # Suppress duplicate proposal_id (same logical mutation); keep earliest ordering_index.
+    seen_ids: Set[str] = set()
+    deduped: List[Dict[str, Any]] = []
+    for p in out:
+        pid = p["proposal_id"]
+        if pid in seen_ids:
+            continue
+        seen_ids.add(pid)
+        deduped.append(p)
+    return deduped
+
+
+def _canonical_candidate_for_proposal_id(candidate: Any) -> Any:
+    """Normalize JSON number shapes so 1 and 1.0 yield the same proposal_id."""
+    if isinstance(candidate, bool):
+        return candidate
+    if isinstance(candidate, int):
+        return float(candidate)
+    if isinstance(candidate, float):
+        return float(candidate)
+    return candidate
+
+
+def proposal_id(family: str, path: str, candidate: Any) -> str:
+    c = _canonical_candidate_for_proposal_id(candidate)
+    payload = canonical_json({"candidate": c, "family": family, "path": path})
+    return sha256_bytes(payload.encode("utf-8"))
 
 
 def _cycle_allowlisted(path: str, allowlist: List[str]) -> bool:
@@ -419,7 +538,7 @@ def _set_mutation(spell: Spell, mutation_path: str, value: Any, allowlist: List[
         key = ".".join(parts[2:])
         spell.inputs[key] = value
         return
-    if parts[:2] == ["spell", "graph"] and len(parts) >= 6 and parts[3] == "args":
+    if parts[:2] == ["spell", "graph"] and len(parts) >= 5 and parts[3] == "args":
         step_id = parts[2]
         arg_key = ".".join(parts[4:])
         for step in spell.graph:
@@ -430,6 +549,21 @@ def _set_mutation(spell: Spell, mutation_path: str, value: Any, allowlist: List[
     raise SpellValidationError(f"Unsupported mutation path: {mutation_path}")
 
 
+def _get_mutation_value(spell: Spell, mutation_path: str) -> Any:
+    parts = mutation_path.split(".")
+    if parts[:2] == ["spell", "inputs"] and len(parts) >= 3:
+        key = ".".join(parts[2:])
+        return spell.inputs.get(key)
+    if parts[:2] == ["spell", "graph"] and len(parts) >= 5 and parts[3] == "args":
+        step_id = parts[2]
+        arg_key = ".".join(parts[4:])
+        for step in spell.graph:
+            if step.step_id == step_id:
+                return step.args.get(arg_key)
+        return None
+    raise SpellValidationError(f"Unsupported mutation path: {mutation_path}")
+
+
 def _fixture_score(artifact_dir: Path, metric_path: str) -> float:
     p = Path(metric_path)
     p = p if p.is_absolute() else (artifact_dir / p)
@@ -437,6 +571,29 @@ def _fixture_score(artifact_dir: Path, metric_path: str) -> float:
     if not isinstance(doc, dict) or "score" not in doc:
         raise StepExecutionError(f"fixture_score missing numeric 'score' in {p}")
     return float(doc["score"])
+
+
+def _ouroboros_recall_snapshot(
+    *,
+    recent_successes: deque,
+    recent_failures: deque,
+    best_score_so_far: float,
+    current_plateau_length: int,
+    accepted_mutation_count: int,
+    rejected_mutation_count: int,
+) -> Dict[str, Any]:
+    return {
+        "recent_k_successes": list(recent_successes),
+        "recent_k_failures": list(recent_failures),
+        "best_score_so_far": best_score_so_far,
+        "current_plateau_length": current_plateau_length,
+        "accepted_mutation_count": accepted_mutation_count,
+        "rejected_mutation_count": rejected_mutation_count,
+    }
+
+
+def _scores_equal(a: float, b: float) -> bool:
+    return abs(a - b) <= 1e-12
 
 
 def ouroboros_chamber(
@@ -456,16 +613,40 @@ def ouroboros_chamber(
     stop = cfg["stop_conditions"]
     metric_path = cfg["target_metric"]["path"]
     metric_abs = str((resolved.artifact_dir / metric_path).resolve())
+    recall_cfg = cfg["recall"]
+    k_succ = recall_cfg["recent_k_successes"]
+    k_fail = recall_cfg["recent_k_failures"]
+    tie_break = cfg["tie_break"]
+    reject_on_noop = cfg["reject_on_noop"]
+    min_imp = float(stop["min_improvement"])
+
+    proposals = expand_cycle_proposals(cfg)
+    if not proposals:
+        raise SpellValidationError("cycle config produced no proposals")
 
     chamber_dir = resolved.artifact_dir / "ouroboros"
     chamber_dir.mkdir(parents=True, exist_ok=True)
+    # Isolate this run from leftover shadow spells (stale rev_*.spell.json confuses audits and disk usage).
+    for stale in sorted(chamber_dir.glob("rev_*.spell.json")):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
 
     revolutions: List[Dict[str, Any]] = []
     failures = 0
     best_score = float("-inf")
     best_spell = resolved.spell
+    best_ordering_index: Optional[int] = None
     no_improve = 0
     attempted = 0
+    rejected_ids: Set[str] = set()
+
+    recent_successes: deque = deque(maxlen=k_succ) if k_succ > 0 else deque()
+    recent_failures: deque = deque(maxlen=k_fail) if k_fail > 0 else deque()
+
+    accepted_mutation_count = 0
+    rejected_mutation_count = 0
 
     # baseline execute to establish score (guardrails: failures => -inf)
     baseline_spell = load_spell(resolved.spell.source_path)
@@ -488,12 +669,13 @@ def ouroboros_chamber(
         except Exception:
             baseline_score = float("-inf")
     best_score = baseline_score
-
-    target_list = cfg["mutation_targets"]
-    idx_target = 0
+    best_ordering_index = None
 
     stop_reason = None
-    for rev in range(1, max_rev + 1):
+    prop_idx = 0
+    revolution = 0
+
+    while revolution < max_rev:
         if attempted >= flux_budget:
             stop_reason = "flux_budget"
             break
@@ -504,22 +686,103 @@ def ouroboros_chamber(
             stop_reason = "plateau"
             break
 
-        state_trace = ["recall", "commune", "forge", "veil", "seal"]
-        target = target_list[idx_target % len(target_list)]
-        idx_target += 1
-        choices = list(target["choices"])
-        choice = choices[(rev - 1) % len(choices)]
-        mutation_path = str(target["path"])
+        # Next proposal: linear scan only (no wrap). Skip proposal_ids rejected earlier in this run.
+        n_props = len(proposals)
+        if n_props == 0:
+            stop_reason = "exhausted_candidates"
+            break
+        while prop_idx < n_props and proposals[prop_idx]["proposal_id"] in rejected_ids:
+            prop_idx += 1
+        if prop_idx >= n_props:
+            stop_reason = "exhausted_candidates"
+            break
 
-        # forge: create shadow spell from current best spell
+        prop = proposals[prop_idx]
+        prop_idx += 1
+        revolution += 1
+        mutation_path = prop["path"]
+        choice = prop["candidate"]
+        family = prop["family"]
+        pid = prop["proposal_id"]
+        ord_idx = prop["ordering_index"]
+
+        recall_snapshot = _ouroboros_recall_snapshot(
+            recent_successes=recent_successes,
+            recent_failures=recent_failures,
+            best_score_so_far=best_score,
+            current_plateau_length=no_improve,
+            accepted_mutation_count=accepted_mutation_count,
+            rejected_mutation_count=rejected_mutation_count,
+        )
+
+        state_trace = ["recall", "commune", "forge", "veil", "seal"]
+
         shadow_spell = load_spell(best_spell.source_path) if best_spell.source_path.exists() else best_spell
         shadow_spell.inputs = dict(best_spell.inputs)
-        # Ensure fixture outputs land under artifact_dir deterministically.
         shadow_spell.inputs["score_path"] = metric_abs
         shadow_spell.graph = [Step(**step.__dict__) for step in best_spell.graph]
+
+        previous_value: Any
+        try:
+            previous_value = _get_mutation_value(shadow_spell, mutation_path)
+        except SpellValidationError:
+            previous_value = None
+
+        noop = json.dumps(previous_value, sort_keys=True) == json.dumps(choice, sort_keys=True)
+        exec_result: Dict[str, Any] = {}
+        score = float("-inf")
+
+        if reject_on_noop and noop:
+            accept_reject_reason = "noop"
+            accepted = False
+            rejected_ids.add(pid)
+            rejected_mutation_count += 1
+            no_improve += 1
+            if k_fail > 0:
+                recent_failures.append(
+                    {
+                        "proposal_id": pid,
+                        "score": best_score,
+                        "mutation_family": family,
+                        "path": mutation_path,
+                        "accepted": False,
+                    }
+                )
+            revolutions.append(
+                {
+                    "revolution": revolution,
+                    "states": state_trace,
+                    "mutation_family": family,
+                    "mutation_target": mutation_path,
+                    "proposal_id": pid,
+                    "mutation_fingerprint": pid,
+                    "proposed_value": choice,
+                    "previous_value": previous_value,
+                    "recall_snapshot": recall_snapshot,
+                    "score_before": best_score,
+                    "score_after": best_score,
+                    "baseline_score": baseline_score,
+                    "accept_reject_reason": accept_reject_reason,
+                    "mutation": {"path": mutation_path, "value": choice},
+                    "candidate_score": score,
+                    "accepted": accepted,
+                    "rejected": True,
+                    "rollback": True,
+                    "stop_reason": None,
+                    "execution_result": {
+                        "status": "skipped",
+                        "trace_path": None,
+                        "proof_path": None,
+                        "capability_denials": None,
+                    },
+                }
+            )
+            continue
+
         _set_mutation(shadow_spell, mutation_path, choice, allowlist)
 
-        shadow_path = chamber_dir / f"rev_{rev:03d}.spell.json"
+        shadow_path = chamber_dir / f"rev_{revolution:03d}.spell.json"
+
         def step_to_json(s: Step, *, is_rollback: bool) -> Dict[str, Any]:
             out: Dict[str, Any] = {
                 "id": s.step_id,
@@ -548,7 +811,7 @@ def ouroboros_chamber(
         }
         shadow_path.write_text(json.dumps(shadow_raw, indent=2, ensure_ascii=False), encoding="utf-8")
 
-        # veil: execute shadow spell (still under enforced vessels/review contracts)
+        score_before = best_score
         attempted += 1
         exec_result = execute_spell(
             load_spell(shadow_path),
@@ -560,33 +823,85 @@ def ouroboros_chamber(
             reviewed_bundle=reviewed_bundle,
             enforce_review_bundle=enforce_review_bundle,
         )
-        score = float("-inf")
         if exec_result.get("status") == "succeeded":
             try:
                 score = _fixture_score(resolved.artifact_dir, metric_path)
             except Exception:
                 score = float("-inf")
-        improved = score > best_score + float(stop["min_improvement"])
+        else:
+            score = float("-inf")
+
+        improved_strict = score > best_score + min_imp
+        improved_tie = False
+        if not improved_strict and _scores_equal(score, best_score) and best_ordering_index is not None:
+            if tie_break == "prefer_higher_ordering_index" and ord_idx > best_ordering_index:
+                improved_tie = True
+            elif tie_break == "prefer_lower_ordering_index" and ord_idx < best_ordering_index:
+                improved_tie = True
+
+        improved = improved_strict or improved_tie
         accepted = bool(improved)
-        if cfg["require_approval_for_accept"] and "accept" not in approvals:
+        accept_reject_reason = "regression"
+        if accepted and cfg["require_approval_for_accept"] and "accept" not in approvals:
             accepted = False
+            accept_reject_reason = "approval_required"
+        elif accepted:
+            accept_reject_reason = "tie_break" if improved_tie and not improved_strict else "improved"
+        elif exec_result.get("status") != "succeeded":
+            accept_reject_reason = "execution_failed"
+        else:
+            accept_reject_reason = "regression"
 
         if accepted:
             best_score = score
             best_spell = load_spell(shadow_path)
+            best_ordering_index = ord_idx
             no_improve = 0
+            accepted_mutation_count += 1
+            if k_succ > 0:
+                recent_successes.append(
+                    {
+                        "proposal_id": pid,
+                        "score": score,
+                        "mutation_family": family,
+                        "path": mutation_path,
+                        "accepted": True,
+                    }
+                )
         else:
             no_improve += 1
+            rejected_mutation_count += 1
+            if accept_reject_reason != "approval_required":
+                rejected_ids.add(pid)
+            if k_fail > 0:
+                recent_failures.append(
+                    {
+                        "proposal_id": pid,
+                        "score": score,
+                        "mutation_family": family,
+                        "path": mutation_path,
+                        "accepted": False,
+                    }
+                )
             if exec_result.get("status") != "succeeded":
                 failures += 1
 
         revolutions.append(
             {
-                "revolution": rev,
+                "revolution": revolution,
                 "states": state_trace,
-                "mutation": {"path": mutation_path, "value": choice},
+                "mutation_family": family,
+                "mutation_target": mutation_path,
+                "proposal_id": pid,
+                "mutation_fingerprint": pid,
+                "proposed_value": choice,
+                "previous_value": previous_value,
+                "recall_snapshot": recall_snapshot,
+                "score_before": score_before,
+                "score_after": score,
                 "baseline_score": baseline_score,
-                "best_score_before": best_score if accepted else best_score,
+                "accept_reject_reason": accept_reject_reason,
+                "mutation": {"path": mutation_path, "value": choice},
                 "candidate_score": score,
                 "accepted": accepted,
                 "rejected": not accepted,
@@ -604,6 +919,15 @@ def ouroboros_chamber(
     if stop_reason is None:
         stop_reason = "max_revolutions"
 
+    recall_final = _ouroboros_recall_snapshot(
+        recent_successes=recent_successes,
+        recent_failures=recent_failures,
+        best_score_so_far=best_score,
+        current_plateau_length=no_improve,
+        accepted_mutation_count=accepted_mutation_count,
+        rejected_mutation_count=rejected_mutation_count,
+    )
+
     witness = {
         "mode": "cycle",
         "chamber": "ouroboros",
@@ -614,6 +938,7 @@ def ouroboros_chamber(
         "stop_reason": stop_reason,
         "baseline_score": baseline_score,
         "best_score": best_score,
+        "recall": recall_final,
         "revolutions": revolutions,
         "nondeterministic_fields": [],
     }

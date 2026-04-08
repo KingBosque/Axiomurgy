@@ -1,0 +1,43 @@
+{
+  "max_revolutions": 8,
+  "flux_budget": 8,
+  "plateau_window": 4,
+  "recall": {
+    "recent_k_successes": 2,
+    "recent_k_failures": 2
+  },
+  "tie_break": "prefer_lower_ordering_index",
+  "reject_on_noop": false,
+  "target_metric": {
+    "kind": "fixture_score",
+    "path": "ouroboros_score.json"
+  },
+  "mutation_target_allowlist": [
+    "spell.inputs.score",
+    "spell.inputs.note",
+    "spell.graph.write_score.args.mult"
+  ],
+  "mutation_families": [
+    {
+      "family": "enum",
+      "path": "spell.inputs.score",
+      "candidates": [2.0, 0.5]
+    },
+    {
+      "family": "numeric",
+      "path": "spell.graph.write_score.args.mult",
+      "candidates": [1.0, 2.0]
+    },
+    {
+      "family": "string",
+      "path": "spell.inputs.note",
+      "candidates": ["a", "b"]
+    }
+  ],
+  "rollback_mode": "shadow_copy",
+  "stop_conditions": {
+    "max_failures": 8,
+    "min_improvement": 0.0,
+    "no_improve_for": 6
+  }
+}

@@ -41,6 +41,11 @@ This v1.1 relay adds:
 - cycle witnesses (`*.ouroboros.json` + `*.ouroboros.raw.json`) for auditability
 - canonical JSON witnesses (trace/prov/proofs) with nondeterministic fields marked
 
+This v1.2 relay adds:
+- Ouroboros recall summaries (bounded recent successes/failures) and top-level `recall` on cycle witnesses
+- mutation families (`enum`, `numeric`, `string`) with stable proposal ordering and `proposal_id`; legacy `mutation_targets` still supported (not combinable with `mutation_families` in one config)
+- optional `reject_on_noop`, `tie_break`, and per-revolution `score_before` / `score_after` / `accept_reject_reason`
+
 ## Non-negotiable invariants
 
 Do not remove or weaken these without updating docs, examples, and tests together:

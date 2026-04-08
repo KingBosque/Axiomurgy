@@ -116,6 +116,20 @@ def main() -> int:
     assert any(item.get("rejected") for item in witness.get("revolutions", []))
     assert Path(cycle_result["ouroboros_witness_raw_path"]).exists()
 
+    # 2e) Ouroboros v1.2: recall + mutation families (enum / numeric / string), deterministic proposals.
+    cycle_v12 = ROOT / "examples" / "cycles" / "ouroboros_cycle_v12.json"
+    assert cycle_v12.exists()
+    cycle_v12_result = run_json(
+        ["examples/ouroboros_score_fixture_v12.spell.json", "--cycle-config", str(cycle_v12)],
+    )
+    witness_v12 = json.loads(Path(cycle_v12_result["ouroboros_witness_path"]).read_text(encoding="utf-8"))
+    assert "recall" in witness_v12
+    assert witness_v12["recall"].get("best_score_so_far") is not None
+    fams = {r.get("mutation_family") for r in witness_v12.get("revolutions", [])}
+    assert "enum" in fams and "numeric" in fams
+    pids = [r.get("proposal_id") for r in witness_v12.get("revolutions", [])]
+    assert len(pids) == len(set(pids))
+
     # 3) Rollback demo (OpenAPI) + raw+diff artifacts
     with tempfile.TemporaryDirectory() as tmpdir:
         port = 8951

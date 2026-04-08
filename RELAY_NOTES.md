@@ -13,6 +13,7 @@ What this lap adds:
 - execution outcomes are first-class in results (`execution_outcome`)
 - cross-platform smoke runner: `python scripts/smoke.py`
 - Ouroboros Chamber (v1.1): optional cyclic runner (`--cycle-config`) with allowlisted mutations, deterministic scoring, rollback via shadow spells, and cycle witnesses
+- Ouroboros Chamber (v1.2): selective recall, mutation families (`enum` / `numeric` / `string`), deterministic proposals with `proposal_id`, richer cycle witnesses (`recall`, per-revolution recall snapshots)
 
 Verified demos in this relay:
 - `python axiomurgy.py spellbooks/primer_codex --describe`
