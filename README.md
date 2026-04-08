@@ -122,7 +122,7 @@ python axiomurgy.py spellbooks/primer_codex --approve publish \
   --review-bundle-in spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.review_bundle.json
 ```
 
-## Ouroboros Chamber (v1.8–v1.9, optional)
+## Ouroboros Chamber (v1.8–v2.0, optional)
 
 Ouroboros Chamber is an **opt-in, bounded cyclic runner** for supervised iterative improvement.
 It does not replace normal execution; it runs only when `--cycle-config` is provided.
@@ -149,6 +149,8 @@ v1.2 adds selective **recall** snapshots (bounded recent successes/failures), ex
 **v1.8** adds **run capsules**: each cycle invocation allocates a deterministic **`run_id`** (`run_NNNNNN` under `<artifact-dir>/ouroboros_runs/`) and writes all Ouroboros outputs (metrics, proposal plans, shadow spells, witnesses, **`run_manifest`**) under that directory so repeated runs do not overwrite each other. Witnesses include **`run_capsule`** metadata (fingerprints, `artifact_root`) and **`key_artifact_paths_relative`**. Cycle JSON may set **`run_capsule.enabled: false`** for legacy flat layout under the base artifact dir; optional **`keep_last_n_runs`** / **`prune_old_capsules`** control safe retention (off by default).
 
 **v1.9** adds **revolution capsules** nested under the run capsule: each preflight skip or veil attempt gets a deterministic **`revolution_id`** (`rev_NNNN`). Executed revolutions write trace / prov / proofs / shadow copies under **`<run_root>/revolutions/rev_NNNN/`** so multiple revolutions in a single run do not overwrite each other (scoring stays on the run root via absolute `score_path`). Preflight-only skips get a lightweight capsule row (**`executed: false`**, **`skipped_reason`**) with **no** revolution artifact tree. Witnesses, **`run_manifest`**, and cycle results include **`revolution_capsules`**, **`proposal_id_to_revolution_id`**, **`revolution_count_*`**, and **`revolution_artifact_roots`**. Optional **`run_capsule.revolution_retention`** defaults to **`preserve_all`** for future pruning hooks (no deletion by default).
+
+**v2.0** adds **replayable revolutions**: each executed veil writes **`replay_record.json`** under **`revolutions/rev_NNNN/`** (seal inputs, recorded score/seal/execution/attestation fingerprints). **`--replay-revolution-dir`** or **`--replay-run-manifest`** + **`--replay-revolution-id`** (diff manifest auto-loads the sibling **`.run_manifest.raw.json`** when paths are redacted) re-executes the stored **`shadow.spell.json`** under an isolated **`--replay-artifact-dir`**, emits **`replay_summary.json`** / **`.raw.json`**, and prints **`replay_status`**: **`match`**, **`drift`**, or **`non_replayable`** (e.g. missing record, fingerprint/policy mismatch, or attestation replay without a matching **`--review-bundle-in`**). Replay never writes into the source run tree.
 
 Notes:
 - review bundles + attestation still apply when `--review-bundle-in` is provided

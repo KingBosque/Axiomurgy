@@ -12,6 +12,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -23,7 +24,7 @@ import jsonschema
 import requests
 import yaml
 
-VERSION = "1.9.0"
+VERSION = "2.0.0"
 ROOT = Path(__file__).resolve().parent
 DEFAULT_POLICY_PATH = ROOT / "policies" / "default.policy.json"
 DEFAULT_SCHEMA_PATH = ROOT / "spell.schema.json"
@@ -447,6 +448,112 @@ def _review_bundle_fingerprint(reviewed_bundle: Optional[Dict[str, Any]]) -> Opt
     if reviewed_bundle is None:
         return None
     return sha256_bytes(canonical_json(reviewed_bundle).encode("utf-8"))
+
+
+REPLAY_RECORD_SCHEMA_VERSION = "1.0.0"
+
+
+def _json_safe_replay(obj: Any) -> Any:
+    return json.loads(json.dumps(obj, default=str))
+
+
+def _snapshot_metric_json_for_replay(art: Path, metric_paths: Set[str]) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for mp in sorted(metric_paths):
+        fp = (art / mp) if not Path(mp).is_absolute() else Path(mp)
+        try:
+            if fp.is_file():
+                out[mp] = load_json(fp)
+            else:
+                out[mp] = {}
+        except OSError:
+            out[mp] = {}
+        except json.JSONDecodeError:
+            out[mp] = {}
+    return out
+
+
+def _write_ouroboros_replay_record(
+    rev_art: Path,
+    *,
+    run_id: str,
+    revolution_id: str,
+    cycle_config_fingerprint: str,
+    metric_path: str,
+    spell_fingerprints_required: Optional[Dict[str, Any]],
+    resolved: ResolvedRunTarget,
+    approvals: Set[str],
+    simulate: bool,
+    enforce_review_bundle: bool,
+    reviewed_bundle: Optional[Dict[str, Any]],
+    initial_metrics: Dict[str, float],
+    metrics_at_best: Dict[str, float],
+    metrics_at_last_accept: Dict[str, float],
+    rec: Dict[str, Any],
+    last_accepted_rec: Optional[Dict[str, Any]],
+    best_ordering_index: Optional[int],
+    candidate_ordering_index: int,
+    revolution: int,
+    last_accepted_revolution: Optional[int],
+    acc_contract: Dict[str, Any],
+    initial_baseline_id: str,
+    active_baseline_id: str,
+    last_accepted_baseline_id: Optional[str],
+    best_primary_at_seal: float,
+    metric_files_before_veil: Dict[str, Dict[str, Any]],
+    exec_result: Dict[str, Any],
+    seal: Dict[str, Any],
+    score_after: float,
+) -> None:
+    recorded_attestation: Optional[Dict[str, Any]] = None
+    if reviewed_bundle is not None:
+        att = compute_attestation(reviewed_bundle, resolved, approvals=approvals)
+        recorded_attestation = {
+            "status": att["status"],
+            "diff_paths": sorted(
+                str(d["path"])
+                for d in (att.get("diffs") or [])
+                if isinstance(d, dict) and d.get("path") is not None
+            ),
+        }
+    doc: Dict[str, Any] = {
+        "schema_version": REPLAY_RECORD_SCHEMA_VERSION,
+        "axiomurgy_version": VERSION,
+        "run_id": run_id,
+        "revolution_id": revolution_id,
+        "parent_run_id": run_id,
+        "cycle_config_fingerprint": cycle_config_fingerprint,
+        "metric_path": metric_path,
+        "policy_path": str(resolved.policy_path.resolve()),
+        "spell_source_path": str(resolved.spell.source_path.resolve()),
+        "review_bundle_fingerprint": _review_bundle_fingerprint(reviewed_bundle),
+        "spell_fingerprints_required": _json_safe_replay(spell_fingerprints_required or {}),
+        "approvals": sorted(approvals),
+        "simulate": simulate,
+        "enforce_review_bundle": enforce_review_bundle,
+        "seal_inputs": {
+            "initial_metrics": {k: float(v) for k, v in sorted(initial_metrics.items())},
+            "metrics_at_best": {k: float(v) for k, v in sorted(metrics_at_best.items())},
+            "metrics_at_last_accept": {k: float(v) for k, v in sorted(metrics_at_last_accept.items())},
+            "rec": _json_safe_replay(rec),
+            "last_accepted_rec": _json_safe_replay(last_accepted_rec) if last_accepted_rec is not None else None,
+            "best_ordering_index": best_ordering_index,
+            "candidate_ordering_index": int(candidate_ordering_index),
+            "revolution": revolution,
+            "last_accepted_revolution": last_accepted_revolution,
+            "acceptance_contract": _json_safe_replay(acc_contract),
+            "initial_baseline_id": initial_baseline_id,
+            "active_baseline_id": active_baseline_id,
+            "last_accepted_baseline_id": last_accepted_baseline_id,
+            "best_primary_at_seal": float(best_primary_at_seal),
+        },
+        "metric_files_before_veil": {k: _json_safe_replay(v) for k, v in sorted(metric_files_before_veil.items())},
+        "recorded_score_after": float(score_after),
+        "recorded_seal_decision": _json_safe_replay(seal),
+        "recorded_execution": _replay_execution_subset_for_compare(exec_result),
+        "recorded_attestation": recorded_attestation,
+    }
+    (rev_art / "replay_record.json").write_text(canonical_json(doc), encoding="utf-8")
 
 
 def write_ouroboros_run_manifest(
@@ -1758,6 +1865,202 @@ def write_ouroboros_proposal_plan(
     return diff_path, raw_path
 
 
+def _replay_execution_subset_for_compare(exec_result: Dict[str, Any]) -> Dict[str, Any]:
+    caps = exec_result.get("capabilities") or {}
+    fp = exec_result.get("fingerprints") or {}
+    return {
+        "status": exec_result.get("status"),
+        "fingerprints_required": _json_safe_replay(fp.get("required")),
+        "capabilities": {
+            "used": sorted(caps.get("used") or []),
+            "overreach": sorted(caps.get("overreach") or []),
+            "reviewed_envelope": caps.get("reviewed_envelope"),
+        },
+        "blocked": _json_safe_replay(exec_result.get("blocked")) if exec_result.get("blocked") is not None else None,
+    }
+
+
+def replay_ouroboros_revolution(
+    resolved: ResolvedRunTarget,
+    *,
+    revolution_dir: Path,
+    approvals: Set[str],
+    simulate: bool,
+    reviewed_bundle: Optional[Dict[str, Any]],
+    enforce_review_bundle: bool,
+    replay_artifact_root: Path,
+) -> Dict[str, Any]:
+    """Re-execute a stored veil revolution and compare to replay_record.json (v2.0)."""
+    base_out: Dict[str, Any] = {
+        "mode": "replay",
+        "axiomurgy_version": VERSION,
+        "original_revolution_id": "",
+        "source_run_id": "",
+        "source_revolution_dir": str(revolution_dir.resolve()),
+        "compared_fields": [],
+        "mismatch_reasons": [],
+        "replay_summary_path": None,
+        "replay_summary_raw_path": None,
+    }
+
+    def _nr(reasons: List[str]) -> Dict[str, Any]:
+        out = dict(base_out)
+        out["replay_status"] = "non_replayable"
+        out["mismatch_reasons"] = reasons
+        return out
+
+    if resolved.spellbook is not None:
+        return _nr(["spellbook_replay_not_supported"])
+
+    rr_path = revolution_dir.resolve() / "replay_record.json"
+    if not rr_path.is_file():
+        return _nr(["missing_replay_record"])
+
+    record = load_json(rr_path)
+    base_out["original_revolution_id"] = str(record.get("revolution_id") or "")
+    base_out["source_run_id"] = str(record.get("run_id") or "")
+
+    req_fp = compute_spell_fingerprints(resolved.spell, resolved.policy_path, repo_root=ROOT).get("required")
+    if canonical_json(_json_safe_replay(req_fp or {})) != canonical_json(_json_safe_replay(record.get("spell_fingerprints_required") or {})):
+        return _nr(["spell_fingerprint_mismatch"])
+
+    if str(resolved.policy_path.resolve()) != str(record.get("policy_path") or ""):
+        return _nr(["policy_path_mismatch"])
+
+    rb_fp_exp = record.get("review_bundle_fingerprint")
+    ra = record.get("recorded_attestation")
+    if ra is not None:
+        if reviewed_bundle is None:
+            return _nr(["review_bundle_required_for_replay"])
+        if _review_bundle_fingerprint(reviewed_bundle) != rb_fp_exp:
+            return _nr(["review_bundle_fingerprint_mismatch"])
+
+    replay_artifact_root.mkdir(parents=True, exist_ok=True)
+    replay_run = replay_artifact_root / "replay_run"
+    if replay_run.exists():
+        shutil.rmtree(replay_run)
+    replay_run.mkdir(parents=True, exist_ok=True)
+    for mp, content in sorted((record.get("metric_files_before_veil") or {}).items()):
+        p = replay_run / mp
+        p.parent.mkdir(parents=True, exist_ok=True)
+        doc = content if isinstance(content, dict) else {}
+        p.write_text(canonical_json(doc), encoding="utf-8")
+
+    shadow_path = revolution_dir.resolve() / "shadow.spell.json"
+    sh = load_spell(shadow_path)
+    metric_path = str(record["metric_path"])
+    metric_abs = str((replay_run / metric_path).resolve())
+    sh.inputs = dict(sh.inputs)
+    sh.inputs["score_path"] = metric_abs
+
+    exec_dir = replay_artifact_root / "replay_exec"
+    if exec_dir.exists():
+        shutil.rmtree(exec_dir)
+    exec_dir.mkdir(parents=True, exist_ok=True)
+
+    exec_new = execute_spell(
+        sh,
+        ["approve", "read", "reason", "simulate", "transform", "verify", "write"],
+        approvals,
+        simulate,
+        resolved.policy_path,
+        exec_dir,
+        reviewed_bundle=reviewed_bundle,
+        enforce_review_bundle=enforce_review_bundle,
+    )
+
+    score_new = _fixture_score_safe(replay_run, metric_path)
+    exec_ok = exec_new.get("status") == "succeeded"
+    si = record["seal_inputs"]
+    seal_new = evaluate_acceptance_contract(
+        artifact_dir=replay_run,
+        contract=si["acceptance_contract"],
+        execution_succeeded=exec_ok,
+        candidate_primary=float(score_new),
+        best_primary=float(si["best_primary_at_seal"]),
+        initial_metrics={k: float(v) for k, v in sorted(si["initial_metrics"].items())},
+        metrics_at_best={k: float(v) for k, v in sorted(si["metrics_at_best"].items())},
+        metrics_at_last_accept={k: float(v) for k, v in sorted(si["metrics_at_last_accept"].items())},
+        rec=si["rec"],
+        last_accepted_rec=si.get("last_accepted_rec"),
+        best_ordering_index=si.get("best_ordering_index"),
+        candidate_ordering_index=int(si["candidate_ordering_index"]),
+        revolution=int(si["revolution"]),
+        last_accepted_revolution=si.get("last_accepted_revolution"),
+    )
+    _enrich_seal_baseline_reference_ids(
+        seal_new,
+        initial_baseline_id=str(si["initial_baseline_id"]),
+        active_baseline_id=str(si["active_baseline_id"]),
+        last_accepted_baseline_id=si.get("last_accepted_baseline_id"),
+    )
+
+    compared_fields: List[str] = []
+    mismatch_reasons: List[str] = []
+
+    compared_fields.append("primary_score")
+    if not _scores_equal(float(score_new), float(record["recorded_score_after"])):
+        mismatch_reasons.append("score_mismatch")
+
+    compared_fields.append("seal_decision")
+    if canonical_json(_json_safe_replay(seal_new)) != canonical_json(_json_safe_replay(record.get("recorded_seal_decision") or {})):
+        mismatch_reasons.append("seal_decision_mismatch")
+
+    compared_fields.append("execution")
+    rec_ex = record.get("recorded_execution") or {}
+    new_ex = _replay_execution_subset_for_compare(exec_new)
+    if canonical_json(_json_safe_replay(rec_ex)) != canonical_json(_json_safe_replay(new_ex)):
+        mismatch_reasons.append("execution_mismatch")
+
+    if ra is not None:
+        compared_fields.append("attestation")
+        att_new = compute_attestation(reviewed_bundle, resolved, approvals=approvals)
+        new_ra = {
+            "status": att_new["status"],
+            "diff_paths": sorted(
+                str(d["path"])
+                for d in (att_new.get("diffs") or [])
+                if isinstance(d, dict) and d.get("path") is not None
+            ),
+        }
+        if canonical_json(_json_safe_replay(new_ra)) != canonical_json(_json_safe_replay(ra)):
+            mismatch_reasons.append("attestation_mismatch")
+
+    replay_status = "match" if not mismatch_reasons else "drift"
+
+    summary_raw: Dict[str, Any] = {
+        "mode": "replay",
+        "replay_status": replay_status,
+        "original_revolution_id": base_out["original_revolution_id"],
+        "source_run_id": base_out["source_run_id"],
+        "source_revolution_dir": base_out["source_revolution_dir"],
+        "replay_record_path": str(rr_path),
+        "compared_fields": compared_fields,
+        "mismatch_reasons": mismatch_reasons,
+        "replay_run_root": str(replay_run.resolve()),
+        "replay_exec_trace": str((exec_dir / f"{sh.name}.trace.json").resolve()),
+    }
+    raw_path = replay_artifact_root / "replay_summary.raw.json"
+    diff_path = replay_artifact_root / "replay_summary.json"
+    raw_path.write_text(canonical_json(summary_raw), encoding="utf-8")
+    diff_path.write_text(
+        canonical_json(
+            normalize_paths_for_portability(json.loads(canonical_json(summary_raw)), repo_root=ROOT)
+        ),
+        encoding="utf-8",
+    )
+
+    out = dict(base_out)
+    out["replay_status"] = replay_status
+    out["compared_fields"] = compared_fields
+    out["mismatch_reasons"] = mismatch_reasons
+    out["replay_summary_path"] = str(diff_path.resolve())
+    out["replay_summary_raw_path"] = str(raw_path.resolve())
+    out["score_replay"] = float(score_new)
+    out["score_recorded"] = float(record["recorded_score_after"])
+    return out
+
+
 def ouroboros_chamber(
     resolved: ResolvedRunTarget,
     *,
@@ -2135,6 +2438,8 @@ def ouroboros_chamber(
         rev_art.mkdir(parents=True, exist_ok=True)
         shutil.copy2(shadow_path, rev_art / "shadow.spell.json")
 
+        metric_files_before_veil = _snapshot_metric_json_for_replay(art, metric_paths_set)
+
         score_before = best_score
         attempted += 1
         exec_result = execute_spell(
@@ -2191,6 +2496,37 @@ def ouroboros_chamber(
             initial_baseline_id=initial_baseline_id,
             active_baseline_id=active_baseline_id,
             last_accepted_baseline_id=last_accepted_baseline_id,
+        )
+        _write_ouroboros_replay_record(
+            rev_art,
+            run_id=run_id,
+            revolution_id=veil_revolution_id,
+            cycle_config_fingerprint=cycle_config_fingerprint,
+            metric_path=metric_path,
+            spell_fingerprints_required=spell_fp.get("required"),
+            resolved=resolved,
+            approvals=approvals,
+            simulate=simulate,
+            enforce_review_bundle=enforce_review_bundle,
+            reviewed_bundle=reviewed_bundle,
+            initial_metrics=initial_metrics,
+            metrics_at_best=metrics_at_best,
+            metrics_at_last_accept=metrics_at_last_accept,
+            rec=rec,
+            last_accepted_rec=last_accepted_rec,
+            best_ordering_index=best_ordering_index,
+            candidate_ordering_index=ord_idx,
+            revolution=revolution,
+            last_accepted_revolution=last_accepted_revolution,
+            acc_contract=acc_contract,
+            initial_baseline_id=initial_baseline_id,
+            active_baseline_id=active_baseline_id,
+            last_accepted_baseline_id=last_accepted_baseline_id,
+            best_primary_at_seal=float(best_score),
+            metric_files_before_veil=metric_files_before_veil,
+            exec_result=exec_result,
+            seal=seal,
+            score_after=float(score),
         )
         _record_seal_acceptance_summary(acceptance_summary, seal)
         accepted = seal.get("decision") == "accept"
@@ -4611,7 +4947,56 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         action="store_true",
         help="Enforce the reviewed capability envelope as a vessel (requires --review-bundle-in)",
     )
+    parser.add_argument(
+        "--replay-revolution-dir",
+        default=None,
+        help="v2.0: directory for a single revolution (e.g. .../revolutions/rev_0001) to replay from replay_record.json",
+    )
+    parser.add_argument(
+        "--replay-run-manifest",
+        default=None,
+        help="v2.0: run_manifest.json path; use with --replay-revolution-id",
+    )
+    parser.add_argument(
+        "--replay-revolution-id",
+        default=None,
+        help="v2.0: revolution id (e.g. rev_0001) when using --replay-run-manifest",
+    )
+    parser.add_argument(
+        "--replay-artifact-dir",
+        default=None,
+        help="v2.0: output directory for replay witnesses (default: temp dir derived from revolution path)",
+    )
     return parser.parse_args(argv)
+
+
+def _load_run_manifest_for_replay(manifest_path: Path) -> Dict[str, Any]:
+    """Prefer raw manifest so artifact_root is a real path; diff manifests may redact paths."""
+    p = Path(manifest_path).resolve()
+    doc = load_json(p)
+    rc = doc.get("run_capsule") or {}
+    art = rc.get("artifact_root")
+    if isinstance(art, str) and art and not art.startswith("<"):
+        try:
+            if Path(art).is_dir():
+                return doc
+        except OSError:
+            pass
+    raw_sibling = p.with_name(p.name.replace(".run_manifest.json", ".run_manifest.raw.json"))
+    if raw_sibling.is_file() and raw_sibling != p:
+        return load_json(raw_sibling)
+    raise SpellValidationError(
+        "cannot resolve run capsule root from manifest (use *.run_manifest.raw.json or a path with real artifact_root)"
+    )
+
+
+def _revolution_dir_from_run_manifest(manifest_path: Path, revolution_id: str) -> Path:
+    doc = _load_run_manifest_for_replay(Path(manifest_path))
+    rc = doc.get("run_capsule") or {}
+    art = rc.get("artifact_root")
+    if not isinstance(art, str) or not art:
+        raise SpellValidationError("run manifest missing run_capsule.artifact_root")
+    return Path(art).resolve() / "revolutions" / revolution_id
 
 
 
@@ -4640,6 +5025,58 @@ def main(argv: Sequence[str]) -> int:
             result = lint_target(target, policy_override=policy_override)
         else:
             resolved = resolve_run_target(target, args.entrypoint, policy_override, artifact_override)
+            want_replay = bool(
+                args.replay_revolution_dir or args.replay_run_manifest or args.replay_revolution_id
+            )
+            if want_replay:
+                if args.describe or args.plan or args.lint or args.review_bundle or args.verify_review_bundle or args.cycle_config:
+                    print(
+                        "ERROR: replay is only valid without --describe/--plan/--lint/"
+                        "--review-bundle/--verify-review-bundle/--cycle-config"
+                    )
+                    return 2
+                if args.replay_run_manifest and not args.replay_revolution_id:
+                    print("ERROR: --replay-run-manifest requires --replay-revolution-id")
+                    return 2
+                if args.replay_revolution_dir and args.replay_run_manifest:
+                    print("ERROR: use only one of --replay-revolution-dir or --replay-run-manifest")
+                    return 2
+                if not args.replay_revolution_dir and not args.replay_run_manifest:
+                    print("ERROR: specify --replay-revolution-dir or --replay-run-manifest")
+                    return 2
+                if args.replay_run_manifest and args.replay_revolution_id:
+                    revolution_dir = _revolution_dir_from_run_manifest(
+                        Path(args.replay_run_manifest), str(args.replay_revolution_id)
+                    )
+                else:
+                    revolution_dir = Path(args.replay_revolution_dir).resolve()
+                if not revolution_dir.is_dir():
+                    print(f"ERROR: revolution directory not found: {revolution_dir}")
+                    return 2
+                reviewed_in = (
+                    load_json(Path(args.review_bundle_in).resolve()) if args.review_bundle_in else None
+                )
+                if args.replay_artifact_dir:
+                    rar = Path(args.replay_artifact_dir).resolve()
+                else:
+                    digest = sha256_bytes(str(revolution_dir.resolve()).encode("utf-8")).hex()[:16]
+                    rar = Path(tempfile.gettempdir()) / f"axiomurgy_replay_{digest}"
+                rar.mkdir(parents=True, exist_ok=True)
+                result = replay_ouroboros_revolution(
+                    resolved,
+                    revolution_dir=revolution_dir,
+                    approvals=set(args.approve),
+                    simulate=bool(args.simulate),
+                    reviewed_bundle=reviewed_in,
+                    enforce_review_bundle=bool(args.enforce_review_bundle),
+                    replay_artifact_root=rar,
+                )
+                print(json_dumps(result))
+                if result["replay_status"] == "non_replayable":
+                    return 4
+                if result["replay_status"] == "drift":
+                    return 3
+                return 0
             if args.describe:
                 result = describe_target(resolved)
             elif args.verify_review_bundle:

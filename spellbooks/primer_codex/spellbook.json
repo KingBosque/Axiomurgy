@@ -1,6 +1,6 @@
 {
   "name": "primer_codex",
-  "version": "1.9.0",
+  "version": "2.0.0",
   "description": "Packaged primer synthesis spellbook with proof-carrying witnesses.",
   "default_entrypoint": "publish_codex",
   "required_capabilities": ["read", "transform", "verify", "write"],

@@ -1758,6 +1758,147 @@ class AxiomurgyRuntimeTests(unittest.TestCase):
                 self.assertTrue((art / rel).is_dir())
                 self.assertTrue((art / rel / "shadow.spell.json").exists())
 
+    def test_v20_replay_match_and_shape(self):
+        resolved = self.runtime.resolve_run_target(
+            ROOT / "examples" / "ouroboros_score_fixture.spell.json", None, None, None
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ad = Path(tmpdir)
+            resolved.artifact_dir = ad
+            cfg_path = ad / "cycle.json"
+            cfg_path.write_text(
+                json.dumps(
+                    {
+                        "max_revolutions": 2,
+                        "flux_budget": 2,
+                        "plateau_window": 2,
+                        "target_metric": {"kind": "fixture_score", "path": "ouroboros_score.json"},
+                        "mutation_target_allowlist": ["spell.inputs.score"],
+                        "mutation_targets": [{"path": "spell.inputs.score", "choices": [2.0, 1.0]}],
+                        "rollback_mode": "shadow_copy",
+                        "stop_conditions": {"max_failures": 2, "min_improvement": 0.0, "no_improve_for": 2},
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            result = self.runtime.ouroboros_chamber(
+                resolved,
+                cycle_config_path=cfg_path,
+                approvals=set(),
+                simulate=False,
+                reviewed_bundle=None,
+                enforce_review_bundle=False,
+            )
+            art = Path(result["run_artifact_root"])
+            rev_dirs = sorted((art / "revolutions").glob("rev_*"))
+            self.assertTrue(rev_dirs)
+            self.assertTrue((rev_dirs[0] / "replay_record.json").is_file())
+            replay_out = ad / "replay_verify"
+            rrep = self.runtime.replay_ouroboros_revolution(
+                self.runtime.resolve_run_target(
+                    ROOT / "examples" / "ouroboros_score_fixture.spell.json", None, None, None
+                ),
+                revolution_dir=rev_dirs[0],
+                approvals=set(),
+                simulate=False,
+                reviewed_bundle=None,
+                enforce_review_bundle=False,
+                replay_artifact_root=replay_out,
+            )
+            self.assertEqual(rrep["replay_status"], "match")
+            self.assertIn("primary_score", rrep["compared_fields"])
+            self.assertIn("seal_decision", rrep["compared_fields"])
+            self.assertEqual(rrep["mismatch_reasons"], [])
+            self.assertTrue(rrep.get("replay_summary_path"))
+            rid = rev_dirs[0].name
+            r2 = self.runtime.replay_ouroboros_revolution(
+                self.runtime.resolve_run_target(
+                    ROOT / "examples" / "ouroboros_score_fixture.spell.json", None, None, None
+                ),
+                revolution_dir=self.runtime._revolution_dir_from_run_manifest(
+                    Path(result["run_manifest_path"]), rid
+                ),
+                approvals=set(),
+                simulate=False,
+                reviewed_bundle=None,
+                enforce_review_bundle=False,
+                replay_artifact_root=ad / "replay_verify_b",
+            )
+            self.assertEqual(r2["replay_status"], "match")
+
+    def test_v20_replay_non_replayable_without_record(self):
+        resolved = self.runtime.resolve_run_target(
+            ROOT / "examples" / "ouroboros_score_fixture.spell.json", None, None, None
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ad = Path(tmpdir)
+            fake_rev = ad / "revolutions" / "rev_0001"
+            fake_rev.mkdir(parents=True)
+            (fake_rev / "shadow.spell.json").write_text(
+                (ROOT / "examples" / "ouroboros_score_fixture.spell.json").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            r = self.runtime.replay_ouroboros_revolution(
+                resolved,
+                revolution_dir=fake_rev,
+                approvals=set(),
+                simulate=False,
+                reviewed_bundle=None,
+                enforce_review_bundle=False,
+                replay_artifact_root=ad / "ro",
+            )
+            self.assertEqual(r["replay_status"], "non_replayable")
+            self.assertIn("missing_replay_record", r["mismatch_reasons"])
+
+    def test_v20_replay_diff_summary_no_windows_paths(self):
+        resolved = self.runtime.resolve_run_target(
+            ROOT / "examples" / "ouroboros_score_fixture.spell.json", None, None, None
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ad = Path(tmpdir)
+            resolved.artifact_dir = ad
+            cfg_path = ad / "cycle.json"
+            cfg_path.write_text(
+                json.dumps(
+                    {
+                        "max_revolutions": 1,
+                        "flux_budget": 1,
+                        "plateau_window": 2,
+                        "target_metric": {"kind": "fixture_score", "path": "ouroboros_score.json"},
+                        "mutation_target_allowlist": ["spell.inputs.score"],
+                        "mutation_targets": [{"path": "spell.inputs.score", "choices": [1.0]}],
+                        "rollback_mode": "shadow_copy",
+                        "stop_conditions": {"max_failures": 2, "min_improvement": 0.0, "no_improve_for": 2},
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            result = self.runtime.ouroboros_chamber(
+                resolved,
+                cycle_config_path=cfg_path,
+                approvals=set(),
+                simulate=False,
+                reviewed_bundle=None,
+                enforce_review_bundle=False,
+            )
+            art = Path(result["run_artifact_root"])
+            rev = next((art / "revolutions").iterdir())
+            self.runtime.replay_ouroboros_revolution(
+                self.runtime.resolve_run_target(
+                    ROOT / "examples" / "ouroboros_score_fixture.spell.json", None, None, None
+                ),
+                revolution_dir=rev,
+                approvals=set(),
+                simulate=False,
+                reviewed_bundle=None,
+                enforce_review_bundle=False,
+                replay_artifact_root=ad / "rout",
+            )
+            diff_text = (ad / "rout" / "replay_summary.json").read_text(encoding="utf-8")
+            self.assertNotRegex(diff_text, r"[A-Za-z]:\\\\")
+
 
 if __name__ == "__main__":
     unittest.main()

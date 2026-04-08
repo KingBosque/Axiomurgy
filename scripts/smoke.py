@@ -443,6 +443,49 @@ def main() -> int:
     if (skip_root / "revolutions").is_dir():
         assert not list((skip_root / "revolutions").iterdir())
 
+    # 2m) Ouroboros v2.0: replay an executed revolution; machine-readable match.
+    smoke_replay_dir = Path(tempfile.gettempdir()) / "axiomurgy_smoke_v20_replay"
+    smoke_replay_dir.mkdir(parents=True, exist_ok=True)
+    cr_rp = run_json(
+        [
+            "examples/ouroboros_score_fixture.spell.json",
+            "--artifact-dir",
+            str(smoke_replay_dir),
+            "--cycle-config",
+            str(cycle_v19),
+        ]
+    )
+    run_root_rp = Path(cr_rp["run_artifact_root"])
+    rev_first = sorted((run_root_rp / "revolutions").iterdir())[0]
+    assert (rev_first / "replay_record.json").exists()
+    replay_out = Path(tempfile.gettempdir()) / "axiomurgy_smoke_v20_replay_out"
+    replay_out.mkdir(parents=True, exist_ok=True)
+    rep = run_json(
+        [
+            "examples/ouroboros_score_fixture.spell.json",
+            "--replay-revolution-dir",
+            str(rev_first),
+            "--replay-artifact-dir",
+            str(replay_out),
+        ]
+    )
+    assert rep.get("mode") == "replay"
+    assert rep.get("replay_status") == "match"
+    assert rep.get("compared_fields")
+    assert Path(rep["replay_summary_path"]).exists()
+    rep_mf = run_json(
+        [
+            "examples/ouroboros_score_fixture.spell.json",
+            "--replay-run-manifest",
+            str(cr_rp["run_manifest_path"]),
+            "--replay-revolution-id",
+            rev_first.name,
+            "--replay-artifact-dir",
+            str(replay_out / "via_manifest"),
+        ]
+    )
+    assert rep_mf.get("replay_status") == "match"
+
     # 3) Rollback demo (OpenAPI) + raw+diff artifacts
     with tempfile.TemporaryDirectory() as tmpdir:
         port = 8951

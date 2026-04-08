@@ -73,6 +73,9 @@ This v1.8 relay adds:
 This v1.9 relay adds:
 - **Revolution capsules** for Ouroboros: deterministic **`revolution_id`** per preflight skip or veil attempt; executed revolutions use **`<run_root>/revolutions/rev_NNNN/`** for witnesses and **`shadow.spell.json`** copy; skipped revolutions record **`executed: false`** without fake execution artifacts; witness + **`run_manifest`** + cycle result expose **`revolution_capsules`**, **`proposal_id_to_revolution_id`**, counts, and **`revolution_artifact_roots`**; optional **`revolution_retention`** (default **preserve all**)
 
+This v2.0 relay adds:
+- **Replay** for executed Ouroboros revolutions: **`replay_record.json`** per veil; CLI **`--replay-revolution-dir`** or **`--replay-run-manifest`** + **`--replay-revolution-id`** with optional **`--replay-artifact-dir`**; mechanical **`replay_status`** (`match` / `drift` / `non_replayable`) comparing score, seal, execution fingerprint slice, and optional attestation; isolated replay witnesses; spellbook targets **`non_replayable`**
+
 ## Non-negotiable invariants
 
 Do not remove or weaken these without updating docs, examples, and tests together:

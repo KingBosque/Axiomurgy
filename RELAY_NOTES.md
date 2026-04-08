@@ -21,6 +21,7 @@ What this lap adds:
 - Ouroboros Chamber (v1.7): **`baseline_registry`**, **`promotion_records`**, **`lineage_summary`**, seal **`baseline_reference_used_id`**, per-revolution **`active_baseline_id`**; optional **`lineage_policy`**
 - Ouroboros Chamber (v1.8): **`run_id`**, per-run **`artifact_root`** under **`ouroboros_runs/`**, **`run_manifest`**, witness **`run_capsule`**; optional **`run_capsule`** retention flags
 - Ouroboros Chamber (v1.9): **`revolution_capsules`** (nested under **`run_capsule`**), per-revolution artifact roots **`revolutions/rev_NNNN/`** for executed veil attempts, **`proposal_id_to_revolution_id`**, revolution counts on witness / manifest / cycle result; preflight skips get capsule rows only; optional **`revolution_retention`** (default preserve all)
+- Ouroboros Chamber (v2.0): **`replay_record.json`** per executed veil; **`--replay-revolution-dir`** / **`--replay-run-manifest`** + **`--replay-revolution-id`**; **`replay_summary`** artifacts; deterministic **`replay_status`**; no writes under source **`revolutions/`**
 
 Verified demos in this relay:
 - `python axiomurgy.py spellbooks/primer_codex --describe`
