@@ -1,0 +1,16 @@
+---
+description: Preflight-first guidance for spell and spellbook changes
+globs:
+  - "**/*.spell.json"
+  - "**/spellbook.json"
+  - "**/default.policy.json"
+  - "**/tests/test_runtime.py"
+  - "**/scripts/smoke.sh"
+alwaysApply: false
+---
+
+- Before changing execution behavior, run `python axiomurgy.py spellbooks/primer_codex --describe`.
+- Then run `python axiomurgy.py spellbooks/primer_codex --lint`.
+- Then run `python axiomurgy.py spellbooks/primer_codex --plan --manifest-out spellbooks/primer_codex/artifacts/primer_codex_publish_v0_6.approval_manifest.json`.
+- Keep the approval manifest machine-readable and stable for downstream agents.
+- If you change describe, lint, or plan output, update `README.md`, `AGENTS.md`, tests, and the smoke script together.

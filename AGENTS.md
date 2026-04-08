@@ -6,7 +6,7 @@ Start here, in order:
 1. Read `README.md`.
 2. Read `RELAY_NOTES.md`.
 3. Read `NEXT_LAP_SPEC.md`.
-4. Skim `axiomurgy.py`, `spell.schema.json`, `spellbook.schema.json`, `examples/`, `spellbooks/`, `policies/`, and `adapters/`.
+4. Skim `axiomurgy.py`, `spell.schema.json`, `spellbook.schema.json`, `examples/`, `spellbooks/`, `policies/`, `adapters/`, `tests/`, and `scripts/`.
 
 ## What this repo is
 
@@ -17,15 +17,16 @@ Axiomurgy treats AI magic as **permissioned causality**:
 - execution should leave a witness trail
 - validators can attach proofs to those witnesses
 - rollback matters whenever side effects happen
+- preflight should be inspectable before execution
 
 ## Current repo truth
 
-This v0.5 relay adds:
-- spellbook manifests and entrypoint loading
-- deterministic validator runes
-- proof-carrying witness summaries
-- a packaged `primer_codex` spellbook
-- tests and smoke coverage for packaged execution
+This v0.6 relay adds:
+- describe mode for resolved targets
+- deterministic linting for spells and spellbooks
+- plan mode for dry execution summaries
+- approval manifests for downstream agents and IDEs
+- expanded tests and smoke coverage across describe → lint → plan → execute
 
 ## Non-negotiable invariants
 
@@ -33,11 +34,12 @@ Do not remove or weaken these without updating docs, examples, and tests togethe
 - spell validation via JSON Schema
 - spellbook validation via JSON Schema
 - dependency-aware planning
+- deterministic linting in the reference runtime
 - policy evaluation before side effects
 - explicit approval semantics for risky writes
 - rollback / compensation after partial failure
 - witness export: trace, PROV-like JSON, SCXML, proofs
-- deterministic validators only in the reference runtime
+- adapters remain demos, not security boundaries
 
 ## Change strategy
 
@@ -56,6 +58,7 @@ If you bump the runtime version, also update matching strings and docs in:
 - `axiomurgy.py`
 - `README.md`
 - `RELAY_NOTES.md`
+- `NEXT_LAP_SPEC.md`
 - `policies/default.policy.json`
 - `spellbooks/*/spellbook.json`
 - example spell names and output paths when appropriate
@@ -68,6 +71,14 @@ Keep the system aligned with its design roots:
 - rune-like composition and programmability
 - creativity, counters, and verification over raw power scaling
 - proof as a first-class magical artifact
+
+## Preferred workflow
+
+Before changing execution behavior, prefer this order:
+1. `--describe`
+2. `--lint`
+3. `--plan`
+4. execution with explicit approvals
 
 ## Preferred next work
 

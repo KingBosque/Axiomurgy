@@ -1,87 +1,89 @@
-# Axiomurgy v0.6 target
+# Axiomurgy v0.7 target
 
 ## Working title
 
-**Plan mode, linting, and approval manifests**
+**Fingerprints, review bundles, and diffable witnesses**
 
 ## Why this should be next
 
 Axiomurgy now has:
-- direct spells
 - packaged spellbooks
 - deterministic validators
-- proof-carrying witnesses
+- proofs and witnesses
+- describe / lint / plan preflight modes
+- approval manifests
 
-What it still lacks is a strong **preflight story**.
-Right now a spell can run and produce good witnesses after the fact, but the runtime still makes it too hard to answer simple questions *before* execution:
-- what entrypoints does this spellbook expose?
-- what writes are about to happen?
-- which steps require approval?
-- are there packaging or dependency problems before I run anything?
+What it still lacks is a strong **link between review and execution**.
+Right now an agent can inspect a plan and manifest before running a spell, but the runtime does not yet make it easy to prove that:
+- the reviewed manifest still matches the spell being executed
+- the spellbook did not change after approval
+- two witness trails differ only in expected ways
 
-That is the gap for v0.6.
+That is the gap for v0.7.
 
 ## Scope
 
-### 1. Plan mode
+### 1. Stable fingerprints
 
-Add a runtime mode that resolves a spell or spellbook and prints a deterministic execution summary without running side effects.
+Add deterministic hashes for:
+- spells
+- spellbooks
+- compiled plans
+- approval manifests
 
-Suggested CLI forms:
+The goal is that two agents can independently compute the same fingerprint for the same preflight state.
+
+Suggested outputs:
+- `spell_fingerprint`
+- `spellbook_fingerprint`
+- `plan_fingerprint`
+- `manifest_fingerprint`
+
+### 2. Review bundles
+
+Add a machine-readable bundle that captures:
+- target path
+- resolved entrypoint
+- policy path
+- artifact dir
+- plan fingerprint
+- manifest fingerprint
+- granted approvals
+- creation timestamp
+
+Suggested CLI shape:
 
 ```text
-python axiomurgy.py spellbooks/primer_codex --describe
-python axiomurgy.py spellbooks/primer_codex --entrypoint publish_codex --plan
+python axiomurgy.py spellbooks/primer_codex --plan \
+  --manifest-out spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.approval_manifest.json \
+  --review-bundle-out spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.review_bundle.json
 ```
 
-Plan output should include:
-- spell name
-- spellbook name and entrypoint when relevant
-- ordered steps
-- step effects and runes
-- referenced dependencies
-- planned writes
-- steps that require approval under the active policy
+### 3. Execute against a reviewed bundle
 
-### 2. Deterministic linting
+Allow execution to consume a review bundle and verify that:
+- the spellbook still resolves the same way
+- the current plan fingerprint matches the reviewed one
+- the current manifest fingerprint matches the reviewed one
+- the requested approvals are consistent with the reviewed grant set
 
-Add a lint mode for spells and spellbooks.
+If verification fails, execution should stop before side effects.
 
-Candidate checks:
-- unknown rune names
-- missing dependency references
-- duplicate step ids
-- output schema path not found
-- spellbook entrypoint path not found
-- spellbook default policy path not found
-- dangerous write steps without any approval requirement in spell constraints or policy
+### 4. Diffable witnesses
 
-Keep the linter deterministic and local.
-Do not add arbitrary code execution.
+Add a comparison mode for:
+- two approval manifests
+- two witness traces
+- two proof summaries
 
-### 3. Approval manifest
+Suggested CLI shape:
 
-Add a machine-readable preflight file that summarizes approvals and risky effects.
+```text
+python axiomurgy.py --diff manifest old.json new.json
+python axiomurgy.py --diff trace old.trace.json new.trace.json
+```
 
-Suggested shape:
-- `required_approvals`
-- `write_steps`
-- `external_calls`
-- `policy_path`
-- `artifact_dir`
-- `simulate_recommendation`
-
-The idea is that another agent or IDE can inspect the manifest before deciding whether to proceed.
-
-### 4. One plan-aware packaged example
-
-Extend `spellbooks/primer_codex/` so it can be:
-- described
-- linted
-- planned
-- executed
-
-Acceptance should demonstrate that the same packaged example works across all four modes.
+Keep the diff deterministic and structured for agent consumption.
 
 ## Acceptance criteria
 
@@ -89,17 +91,17 @@ A change is successful when all of the following are true:
 
 1. `python -m pytest -q` passes.
 2. `bash scripts/smoke.sh` passes.
-3. The runtime can describe and plan at least one packaged spellbook entrypoint.
-4. The linter reports success on the packaged primer spellbook.
-5. The plan output or manifest clearly lists required approvals and planned writes.
+3. Plan mode emits stable fingerprints.
+4. A review bundle can be generated and then verified during execution.
+5. Diff mode clearly reports changes in approvals, writes, or witness outcomes.
 
 ## Non-goals
 
 Not for this lap:
-- real sandboxing for untrusted code
-- distributed execution
-- production auth or secret management
-- arbitrary user-defined lint plugins
+- real cryptographic signing infrastructure
+- external key management
+- distributed approvals
+- production secret storage
 
 ## Guardrails
 
@@ -107,5 +109,6 @@ Keep these constraints in place:
 - risky writes still require approval
 - rollback stays first-class
 - proofs remain on by default when witness recording is enabled
+- lint and plan remain deterministic and local
 - adapters stay clearly marked as demos
 - keep the code understandable for a follow-on agent
