@@ -1,0 +1,43 @@
+"""Spell loading, planning, policy, and capability manifests."""
+
+from .legacy import (
+    build_approval_manifest,
+    build_plan_summary,
+    capability_kinds_for_step,
+    capability_manifest_for_plan,
+    check_spell_capabilities,
+    compile_plan,
+    evaluate_policy,
+    evaluate_policy_static,
+    external_call_kind,
+    load_spell,
+    load_spellbook,
+    parse_step,
+    resolve_run_target,
+    resolve_static_reference,
+    resolve_static_value,
+    rule_matches,
+    step_dependencies,
+    summarize_write_target,
+)
+
+__all__ = [
+    "parse_step",
+    "load_spell",
+    "load_spellbook",
+    "resolve_run_target",
+    "check_spell_capabilities",
+    "compile_plan",
+    "rule_matches",
+    "evaluate_policy_static",
+    "evaluate_policy",
+    "resolve_static_reference",
+    "resolve_static_value",
+    "step_dependencies",
+    "summarize_write_target",
+    "external_call_kind",
+    "capability_kinds_for_step",
+    "capability_manifest_for_plan",
+    "build_approval_manifest",
+    "build_plan_summary",
+]
