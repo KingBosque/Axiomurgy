@@ -61,6 +61,8 @@ See [CLI_CONTRACTS.md](CLI_CONTRACTS.md) for exit codes and streams.
 
 Optional HTTP tests against a real Vermyth server are marked `vermyth_live` and run only when `AXIOMURGY_VERMYTH_LIVE=1` and a base URL is set. See `tests/integration/test_vermyth_live.py` and `pytest.ini`. Pin the Vermyth version you validated (PyPI or Git tag) in commit messages; optional dependency hints live in `requirements-vermyth-integration.txt`.
 
+**Semantic recommendations** (separate from `vermyth_gate`): live HTTP baseline compare is documented in [`SEMANTIC_RECOMM_VERMYTH_PIN.md`](SEMANTIC_RECOMM_VERMYTH_PIN.md) and enforced by [`.github/workflows/semantic_recommend_baseline.yml`](../.github/workflows/semantic_recommend_baseline.yml) when secrets are set.
+
 ## Ranked compatibility risks
 
 1. **Medium:** Ouroboros with `vermyth_gate.enabled` triggers an extra HTTP call every invocation (plus baseline execution work inside the chamber).

@@ -6,6 +6,8 @@ Uses the same probe payload as planning-time ``fetch_semantic_recommendations`` 
 Environment:
   AXIOMURGY_VERMYTH_BASE_URL or VERMYTH_BASE_URL — Vermyth HTTP base (required unless --offline)
   VERMYTH_HTTP_TOKEN / AXIOMURGY_VERMYTH_HTTP_TOKEN — optional Bearer auth
+  AXIOMURGY_VERMYTH_GIT_SHA or VERMYTH_GIT_SHA — override reported vermyth_git for baseline compare (e.g. CI)
+  Otherwise vermyth_git is git rev-parse from ../Vermyth, or ./vermyth under the Axiomurgy repo root
 
 Examples:
   python scripts/eval_semantic_recommendations.py --json \\
@@ -63,6 +65,21 @@ def _git_head(repo: Path) -> str | None:
             return r.stdout.strip()
     except (OSError, subprocess.TimeoutExpired):
         pass
+    return None
+
+
+def _vermyth_git_for_metadata() -> str | None:
+    """Pin shown in reports and baseline compare: env override, then sibling or workspace clone."""
+    for key in ("AXIOMURGY_VERMYTH_GIT_SHA", "VERMYTH_GIT_SHA"):
+        raw = os.environ.get(key)
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+    sibling = ROOT.parent / "Vermyth"
+    if sibling.is_dir():
+        return _git_head(sibling)
+    nested = ROOT / "vermyth"
+    if nested.is_dir():
+        return _git_head(nested)
     return None
 
 
@@ -194,13 +211,14 @@ def compare_to_baseline(
     current_meta: dict[str, Any],
     runs: list[dict[str, Any]],
     allow_sha_drift: bool,
+    allow_axiomurgy_sha_drift: bool = False,
 ) -> tuple[bool, list[str]]:
     """Return (ok, failure_messages). On regression, stderr should print the first spell-related failure."""
     failures: list[str] = []
     ag = baseline.get("axiomurgy_git")
     vg = baseline.get("vermyth_git")
     if not allow_sha_drift:
-        if ag and current_meta.get("axiomurgy_git") != ag:
+        if ag and current_meta.get("axiomurgy_git") != ag and not allow_axiomurgy_sha_drift:
             failures.append(
                 f"meta: axiomurgy_git drift baseline={ag!r} current={current_meta.get('axiomurgy_git')!r}"
             )
@@ -534,6 +552,11 @@ def main() -> int:
         action="store_true",
         help="With --compare-baseline, do not fail when axiomurgy_git / vermyth_git differ from the baseline.",
     )
+    ap.add_argument(
+        "--allow-axiomurgy-sha-drift",
+        action="store_true",
+        help="With --compare-baseline, allow axiomurgy_git to differ (e.g. CI on arbitrary commits); still enforce vermyth_git unless --allow-sha-drift.",
+    )
     args = ap.parse_args()
 
     if args.offline and (args.write_baseline or args.compare_baseline):
@@ -569,7 +592,7 @@ def main() -> int:
 
     meta: dict[str, Any] = {
         "axiomurgy_git": _git_head(ROOT),
-        "vermyth_git": _git_head(ROOT.parent / "Vermyth") if (ROOT.parent / "Vermyth").is_dir() else None,
+        "vermyth_git": _vermyth_git_for_metadata(),
         "environment_note": "Pin Vermyth version in CI/docs when recording golden runs",
     }
 

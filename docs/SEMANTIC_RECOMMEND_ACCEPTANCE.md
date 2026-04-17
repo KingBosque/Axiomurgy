@@ -7,6 +7,8 @@ Semantic bundle recommendations are **advisory-only**. They do not change planni
 - Corpus and expectations: [`docs/data/semantic_recommend_corpus.json`](data/semantic_recommend_corpus.json).
 - Harness: [`scripts/eval_semantic_recommendations.py`](../scripts/eval_semantic_recommendations.py) (`--calibrate`, `--write-report`).
 - Committed HTTP baseline (optional fingerprints): [`docs/reports/compatibility_baseline_live_v1.json`](reports/compatibility_baseline_live_v1.json), schema [`docs/reports/compatibility_baseline_v1.schema.json`](reports/compatibility_baseline_v1.schema.json).
+- Pin policy, CI gate, and refresh rules: [`docs/SEMANTIC_RECOMM_VERMYTH_PIN.md`](SEMANTIC_RECOMM_VERMYTH_PIN.md).
+- Status JSON (read-only): [`scripts/semantic_seam_status.py`](../scripts/semantic_seam_status.py).
 
 ## Labels (per spell run)
 
@@ -14,7 +16,7 @@ From the harness when `--calibrate` is used:
 
 | Label | Meaning |
 |-------|---------|
-| `correct_match` | Top recommendation’s `bundle_id` is in `must_include` and `match_kind` is `exact`, or positives with empty `must_include` treated as satisfied. |
+| `correct_match` | If `must_include_bundle_ids` is **empty**: any non-empty top recommendation (used for edge expectations). If **non-empty**: top `bundle_id` must be in `must_include` and `match_kind` must be `exact`. (All current corpus **positive** rows have non-empty `must_include`.) |
 | `weak_but_plausible` | Top `bundle_id` in `must_include` but `match_kind` is `advisory` (not `exact`). |
 | `wrong_match` | Top `bundle_id` is in `must_not_include`, or (positive case) top not in `must_include` when that list is non-empty. |
 | `no_match` | Empty recommendation list. |
@@ -36,7 +38,8 @@ See `classify_row` in the harness for exact rules.
 
 - Runs the same live probe as a normal harness invocation, then compares each corpus spell to [`compatibility_baseline_live_v1.json`](reports/compatibility_baseline_live_v1.json) (or another v1 file).
 - **Exit code `1`** on regression; **stderr** prints the first failing line (spell or meta), then remaining failures.
-- **`--allow-sha-drift`**: do not fail when `axiomurgy_git` / `vermyth_git` differ from the baseline file (useful when pinning is relaxed locally).
+- **`--allow-sha-drift`**: skip **both** `axiomurgy_git` and `vermyth_git` checks (local smoke only; not the primary CI policy).
+- **`--allow-axiomurgy-sha-drift`**: allow `axiomurgy_git` to differ from the baseline (e.g. CI on any commit); still enforce **`vermyth_git`** when the baseline sets it. This is how [`.github/workflows/semantic_recommend_baseline.yml`](../.github/workflows/semantic_recommend_baseline.yml) runs.
 - When `recommendations_fingerprint` is **non-null** in the baseline, the probe’s normalized recommendation list must match that fingerprint (see harness for normalization). With **null** fingerprints, only top bundle / negative rules / optional `expected_match_kind` apply.
 
 ## Tie-break (Vermyth)

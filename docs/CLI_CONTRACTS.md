@@ -59,7 +59,7 @@ Full gate semantics, attestation notes, and replay/Ouroboros divergence are docu
 - **`--export-vermyth-program PATH`**: writes a standalone `vermyth_program_export` JSON document and exits (no `--plan` / `--describe` / `--lint` / `--review-bundle`).
 - **`--vermyth-program`**: with `--plan` or `--review-bundle`, adds `vermyth_program_export` to the plan JSON.
 - **`--vermyth-validate`**: adds `vermyth_program_preview` (Vermyth `compile_program` response slice) when a base URL is set.
-- **`--vermyth-recommendations`**: adds `semantic_recommendations` (advisory; may be `unavailable` without a server).
+- **`--vermyth-recommendations`**: adds `semantic_recommendations` (advisory; may be `unavailable` without a server). Baseline compare / pin policy: [SEMANTIC_RECOMM_VERMYTH_PIN.md](SEMANTIC_RECOMM_VERMYTH_PIN.md), workflow [`.github/workflows/semantic_recommend_baseline.yml`](../.github/workflows/semantic_recommend_baseline.yml).
 - **`--vermyth-receipt`**: with execution + witness recording, also writes `*.vermyth_receipt.json` (unsigned cross-reference). Alternatively `AXIOMURGY_VERMYTH_RECEIPT=1`.
 - **Policy** `vermyth_gate`: see [VERMYTH_GATE.md](VERMYTH_GATE.md).
 - **Culture memory**: `AXIOMURGY_CULTURE=1` adds an optional `culture` block to `--describe` when `AXIOMURGY_CULTURE_DB` points at a SQLite catalog (or default temp path).

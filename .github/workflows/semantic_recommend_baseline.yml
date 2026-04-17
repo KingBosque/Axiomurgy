@@ -1,0 +1,66 @@
+# Live HTTP semantic recommendation baseline vs. docs/reports/compatibility_baseline_live_v1.json
+# Requires: repository secrets VERMYTH_HTTP_URL (and optional VERMYTH_HTTP_TOKEN)
+# Pin: VERMYTH_GIT_REF must match the committed baseline file's vermyth_git (see docs/SEMANTIC_RECOMM_VERMYTH_PIN.md)
+
+name: Semantic recommend baseline
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+  pull_request:
+    branches: [master, main]
+
+env:
+  # Must match docs/reports/compatibility_baseline_live_v1.json "vermyth_git" (or a commit reachable from that ref).
+  VERMYTH_GIT_REF: 845e4de1cc24418a1b0e50f665ba2c9a28b9d131
+  VERMYTH_REPOSITORY: KingBosque/Vermyth
+
+jobs:
+  compare_baseline:
+    if: ${{ secrets.VERMYTH_HTTP_URL != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install package and dev dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Checkout Vermyth (for VERMYTH_GIT_SHA)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.VERMYTH_REPOSITORY }}
+          ref: ${{ env.VERMYTH_GIT_REF }}
+          path: vermyth
+
+      - name: Export Vermyth SHA for harness metadata
+        id: vermyth_sha
+        run: echo "sha=$(git -C vermyth rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Run compare-baseline against live Vermyth
+        env:
+          AXIOMURGY_VERMYTH_BASE_URL: ${{ secrets.VERMYTH_HTTP_URL }}
+          AXIOMURGY_VERMYTH_HTTP_TOKEN: ${{ secrets.VERMYTH_HTTP_TOKEN }}
+          VERMYTH_GIT_SHA: ${{ steps.vermyth_sha.outputs.sha }}
+        run: |
+          python scripts/eval_semantic_recommendations.py --calibrate --json \
+            --write-report docs/reports/ci_semantic_recommend_baseline \
+            --compare-baseline docs/reports/compatibility_baseline_live_v1.json \
+            --allow-axiomurgy-sha-drift
+
+      - name: Upload calibration report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-recommend-baseline-run
+          path: |
+            docs/reports/ci_semantic_recommend_baseline.json
+            docs/reports/ci_semantic_recommend_baseline.md
+          if-no-files-found: ignore
+          retention-days: 14

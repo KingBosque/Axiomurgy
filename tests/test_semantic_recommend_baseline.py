@@ -20,6 +20,23 @@ def _load_eval_script():
 
 
 class TestCompareToBaseline(unittest.TestCase):
+    def test_allow_axiomurgy_sha_drift_still_enforces_vermyth(self) -> None:
+        mod = _load_eval_script()
+        baseline = {
+            "axiomurgy_git": "old_axiomurgy",
+            "vermyth_git": "pinned_vermyth",
+            "expectations": [],
+        }
+        ok, fails = mod.compare_to_baseline(
+            baseline,
+            current_meta={"axiomurgy_git": "new_axiomurgy", "vermyth_git": "wrong_vermyth"},
+            runs=[],
+            allow_sha_drift=False,
+            allow_axiomurgy_sha_drift=True,
+        )
+        self.assertFalse(ok)
+        self.assertTrue(any("vermyth_git drift" in f for f in fails))
+
     def test_pass_when_probe_matches_baseline(self) -> None:
         mod = _load_eval_script()
         baseline = {

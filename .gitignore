@@ -2,6 +2,8 @@ artifacts/
 spellbooks/**/artifacts/
 axiomurgy_workspace/
 axiomurgy_mock_issues.json
+# Nested Vermyth clone for CI / local pin (see .github/workflows/semantic_recommend_baseline.yml)
+vermyth/
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -11,3 +13,6 @@ workspace/
 build/
 dist/
 *.egg
+# CI harness output (semantic_recommend_baseline workflow)
+docs/reports/ci_semantic_recommend_baseline.json
+docs/reports/ci_semantic_recommend_baseline.md

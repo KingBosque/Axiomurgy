@@ -45,7 +45,7 @@ Ground-truth and spell paths live in [`docs/data/semantic_recommend_corpus.json`
 
 | Stability | Meaning |
 |-----------|---------|
-| **Supported (catalogued)** | Spell appears in [`docs/data/semantic_recommend_corpus.json`](../docs/data/semantic_recommend_corpus.json) with non-empty `must_include` / `primary_bundle_id` and an `axiomurgy_*` bundle id in that row. Calibrated in harness and (when applicable) in [`docs/reports/compatibility_baseline_live_v1.json`](../docs/reports/compatibility_baseline_live_v1.json). |
+| **Supported (catalogued)** | Spell appears in [`docs/data/semantic_recommend_corpus.json`](../docs/data/semantic_recommend_corpus.json) with non-empty `must_include` / `primary_bundle_id` and an `axiomurgy_*` bundle id in that row. Calibrated in harness and (when applicable) in [`docs/reports/compatibility_baseline_live_v1.json`](../docs/reports/compatibility_baseline_live_v1.json). **Corpus evidence:** every positive row maps to a bundle in `axiomurgy_aligned_bundles`; there are **no uncovered positive families** in the current corpus (see [`docs/SEMANTIC_RECOMM_VERMYTH_PIN.md`](../docs/SEMANTIC_RECOMM_VERMYTH_PIN.md)). |
 | **Unsupported / exploratory** | Any spell not listed there, or workflows without an `axiomurgy_*` bundle in the Vermyth catalog. **No semantic bundle guarantee**: recommendations may be empty, generic, or drift as the catalog changes. |
 
 ## Known no-match cases (expected)
@@ -112,9 +112,9 @@ Uses [`docs/data/semantic_recommend_corpus.json`](../docs/data/semantic_recommen
 
 **Labels (deterministic):**
 
-- **correct_match** — Top recommendation has `match_kind` `exact` and `bundle_id` in `must_include_bundle_ids`.
-- **weak_but_plausible** — Top has `match_kind` `advisory` and `bundle_id` in `must_include`.
-- **wrong_match** — Top bundle is in `must_not_include`, or (positive case) top not in `must_include` when non-empty.
+- **correct_match** — If `must_include_bundle_ids` is empty: any non-empty recommendations. If non-empty: top `bundle_id` in `must_include` and `match_kind` is `exact`.
+- **weak_but_plausible** — Top `bundle_id` in `must_include` but `match_kind` is not `exact` (e.g. `advisory`).
+- **wrong_match** — Top bundle is in `must_not_include`, or (positive case) top not in `must_include` when that list is non-empty.
 - **no_match** — Empty recommendation list.
 
 Offline probe only (no Vermyth server):
@@ -138,7 +138,11 @@ python scripts/eval_semantic_recommendations.py --offline
   python scripts/eval_semantic_recommendations.py --compare-baseline docs/reports/compatibility_baseline_live_v1.json
   ```
 
-  Use `--allow-sha-drift` when git pins intentionally differ locally.
+  Use **`--allow-axiomurgy-sha-drift`** when comparing from an arbitrary Axiomurgy commit (e.g. CI) while still enforcing **`vermyth_git`**. Use **`--allow-sha-drift`** only for local smoke when both git pins may differ.
+
+  **CI:** [`.github/workflows/semantic_recommend_baseline.yml`](../.github/workflows/semantic_recommend_baseline.yml) runs this gate when `VERMYTH_HTTP_URL` is configured (see [`docs/SEMANTIC_RECOMM_VERMYTH_PIN.md`](../docs/SEMANTIC_RECOMM_VERMYTH_PIN.md)).
+
+  **Status:** `python scripts/semantic_seam_status.py` (optional `--probe` if `AXIOMURGY_VERMYTH_BASE_URL` is set).
 
 ### Acceptance thresholds
 
@@ -154,5 +158,4 @@ When recommendations are fetched, [`fetch_semantic_recommendations`](../axiomurg
 
 Further refinements:
 
-- Optional CI job that runs `--compare-baseline` when `AXIOMURGY_VERMYTH_BASE_URL` is available.
 - Tighten **advisory** tiers only when calibration shows a wrong top-1.
