@@ -1,4 +1,7 @@
-"""Regression: bundled schema/policy paths ship with the package (wheel-safe)."""
+"""Regression: bundled schema/policy paths ship with the package (wheel-safe).
+
+Repo-root mirror parity vs bundled is enforced in CI via ``scripts/sync_contract_mirrors.py --check``.
+"""
 
 from __future__ import annotations
 

@@ -49,8 +49,9 @@ This relay upgrades the runtime from **capability-sealed execution** to **enforc
 
 - `pyproject.toml` - package metadata and bundled data (schemas ship under `axiomurgy/bundled/`)
 - `axiomurgy.py` - compatibility CLI shim
-- `spell.schema.json` - spell contract (mirrors `axiomurgy/bundled/spell.schema.json`; keep in sync)
-- `spellbook.schema.json` - spellbook manifest contract (mirrors `axiomurgy/bundled/spellbook.schema.json`)
+- `axiomurgy/bundled/` - **canonical** spell/spellbook schemas and default policy (see [docs/CONTRACT_FILES.md](docs/CONTRACT_FILES.md))
+- `spell.schema.json` - repo-root mirror of bundled spell schema (refresh with `python scripts/sync_contract_mirrors.py`)
+- `spellbook.schema.json` - repo-root mirror of bundled spellbook schema
 - `examples/` - direct runnable spells
 - `spellbooks/primer_codex/` - packaged proof-carrying spellbook with preflight artifacts
 - `primers/` - local copies of the seven uploaded primer transcripts
@@ -82,7 +83,7 @@ Developer installs (tests) also:
 python -m pip install -r requirements-dev.txt
 ```
 
-CLI exit codes, stdout/stderr behavior, and entrypoints are summarized in [docs/CLI_CONTRACTS.md](docs/CLI_CONTRACTS.md).
+CLI exit codes, stdout/stderr behavior, and entrypoints are summarized in [docs/CLI_CONTRACTS.md](docs/CLI_CONTRACTS.md). Canonical contract JSON locations and mirror sync are [docs/CONTRACT_FILES.md](docs/CONTRACT_FILES.md).
 
 ## Quick start
 
