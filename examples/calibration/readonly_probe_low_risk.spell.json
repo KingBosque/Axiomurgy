@@ -1,0 +1,24 @@
+{
+  "spell": "calibration_readonly_low_risk",
+  "intent": "Calibration negative control: single read step, low risk, no writes.",
+  "inputs": {
+    "msg": "probe"
+  },
+  "constraints": {
+    "risk": "low"
+  },
+  "graph": [
+    {
+      "id": "read_once",
+      "rune": "mirror.read",
+      "effect": "read",
+      "args": {
+        "input": "$inputs.msg"
+      }
+    }
+  ],
+  "rollback": [],
+  "witness": {
+    "record": false
+  }
+}

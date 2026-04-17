@@ -1,0 +1,116 @@
+{
+  "method": "in_process_vermyth_recommend_for_plain_invocation",
+  "note": "Same logic as HTTP /arcane/recommend without adapter envelope; pin Vermyth checkout with bundled JSON.",
+  "axiomurgy_git": "ca57f32a0094546ce4a7cf4a07a33199119d71d3",
+  "vermyth_git": "cff58928cad8f3f0579a615af176bb7b6676cede",
+  "runs": [
+    {
+      "spell_path": "examples/inbox_triage.spell.json",
+      "family": "hitl_outbound",
+      "recommendation_count": 1,
+      "recommendations": [
+        {
+          "bundle_id": "axiomurgy_inbox_triage",
+          "match_kind": "exact",
+          "strength": 0.94
+        }
+      ]
+    },
+    {
+      "spell_path": "examples/openapi_ticket_then_fail.spell.json",
+      "family": "openapi_rollback",
+      "recommendation_count": 1,
+      "recommendations": [
+        {
+          "bundle_id": "axiomurgy_openapi_rollback",
+          "match_kind": "exact",
+          "strength": 0.93
+        }
+      ]
+    },
+    {
+      "spell_path": "examples/research_brief.spell.json",
+      "family": "research_stage",
+      "recommendation_count": 1,
+      "recommendations": [
+        {
+          "bundle_id": "axiomurgy_research_stage",
+          "match_kind": "exact",
+          "strength": 0.92
+        }
+      ]
+    },
+    {
+      "spell_path": "examples/primer_to_axioms.spell.json",
+      "family": "primer_curriculum",
+      "recommendation_count": 1,
+      "recommendations": [
+        {
+          "bundle_id": "axiomurgy_primer_to_axioms",
+          "match_kind": "exact",
+          "strength": 0.91
+        }
+      ]
+    },
+    {
+      "spell_path": "examples/primer_via_mcp.spell.json",
+      "family": "primer_curriculum",
+      "recommendation_count": 1,
+      "recommendations": [
+        {
+          "bundle_id": "axiomurgy_primer_via_mcp",
+          "match_kind": "exact",
+          "strength": 0.91
+        }
+      ]
+    },
+    {
+      "spell_path": "spellbooks/primer_codex/spells/publish_codex.spell.json",
+      "family": "primer_curriculum",
+      "recommendation_count": 1,
+      "recommendations": [
+        {
+          "bundle_id": "axiomurgy_primer_codex_publish",
+          "match_kind": "exact",
+          "strength": 0.91
+        }
+      ]
+    },
+    {
+      "spell_path": "examples/ouroboros_score_fixture.spell.json",
+      "family": "meta_scoring",
+      "recommendation_count": 1,
+      "recommendations": [
+        {
+          "bundle_id": "axiomurgy_ouroboros_score_fixture",
+          "match_kind": "exact",
+          "strength": 0.89
+        }
+      ]
+    },
+    {
+      "spell_path": "examples/ouroboros_score_fixture_v12.spell.json",
+      "family": "meta_scoring",
+      "recommendation_count": 1,
+      "recommendations": [
+        {
+          "bundle_id": "axiomurgy_ouroboros_score_fixture_v12",
+          "match_kind": "exact",
+          "strength": 0.89
+        }
+      ]
+    },
+    {
+      "spell_path": "examples/calibration/readonly_probe_low_risk.spell.json",
+      "family": "negative_control",
+      "recommendation_count": 0,
+      "recommendations": []
+    },
+    {
+      "spell_path": "examples/calibration/write_only_high_risk.spell.json",
+      "family": "negative_control",
+      "recommendation_count": 0,
+      "recommendations": []
+    }
+  ]
+}

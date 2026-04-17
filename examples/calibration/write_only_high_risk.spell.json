@@ -1,0 +1,27 @@
+{
+  "spell": "calibration_write_high_other",
+  "intent": "Calibration negative control: high-risk write with a scope that must not match inbox or OpenAPI example spells.",
+  "inputs": {
+    "path": "artifacts/calibration_probe.txt"
+  },
+  "constraints": {
+    "risk": "high"
+  },
+  "graph": [
+    {
+      "id": "touch",
+      "rune": "gate.file_write",
+      "effect": "write",
+      "args": {
+        "from": {
+          "x": 1
+        },
+        "path": "$inputs.path"
+      }
+    }
+  ],
+  "rollback": [],
+  "witness": {
+    "record": false
+  }
+}

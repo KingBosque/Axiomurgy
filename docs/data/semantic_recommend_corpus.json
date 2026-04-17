@@ -1,0 +1,122 @@
+{
+  "$comment": "Ground-truth for semantic recommendation calibration. Paths relative to Axiomurgy repo root.",
+  "version": 1,
+  "axiomurgy_aligned_bundles": [
+    "axiomurgy_inbox_triage",
+    "axiomurgy_openapi_rollback",
+    "axiomurgy_research_stage",
+    "axiomurgy_primer_to_axioms",
+    "axiomurgy_primer_via_mcp",
+    "axiomurgy_primer_codex_publish",
+    "axiomurgy_ouroboros_score_fixture",
+    "axiomurgy_ouroboros_score_fixture_v12"
+  ],
+  "spells": [
+    {
+      "path": "examples/inbox_triage.spell.json",
+      "family": "hitl_outbound",
+      "expect": {
+        "primary_bundle_id": "axiomurgy_inbox_triage",
+        "must_include_bundle_ids": ["axiomurgy_inbox_triage"],
+        "must_not_include_bundle_ids": []
+      }
+    },
+    {
+      "path": "examples/openapi_ticket_then_fail.spell.json",
+      "family": "openapi_rollback",
+      "expect": {
+        "primary_bundle_id": "axiomurgy_openapi_rollback",
+        "must_include_bundle_ids": ["axiomurgy_openapi_rollback"],
+        "must_not_include_bundle_ids": []
+      }
+    },
+    {
+      "path": "examples/research_brief.spell.json",
+      "family": "research_stage",
+      "expect": {
+        "primary_bundle_id": "axiomurgy_research_stage",
+        "must_include_bundle_ids": ["axiomurgy_research_stage"],
+        "must_not_include_bundle_ids": []
+      }
+    },
+    {
+      "path": "examples/primer_to_axioms.spell.json",
+      "family": "primer_curriculum",
+      "expect": {
+        "primary_bundle_id": "axiomurgy_primer_to_axioms",
+        "must_include_bundle_ids": ["axiomurgy_primer_to_axioms"],
+        "must_not_include_bundle_ids": []
+      }
+    },
+    {
+      "path": "examples/primer_via_mcp.spell.json",
+      "family": "primer_curriculum",
+      "expect": {
+        "primary_bundle_id": "axiomurgy_primer_via_mcp",
+        "must_include_bundle_ids": ["axiomurgy_primer_via_mcp"],
+        "must_not_include_bundle_ids": []
+      }
+    },
+    {
+      "path": "spellbooks/primer_codex/spells/publish_codex.spell.json",
+      "family": "primer_curriculum",
+      "expect": {
+        "primary_bundle_id": "axiomurgy_primer_codex_publish",
+        "must_include_bundle_ids": ["axiomurgy_primer_codex_publish"],
+        "must_not_include_bundle_ids": []
+      }
+    },
+    {
+      "path": "examples/ouroboros_score_fixture.spell.json",
+      "family": "meta_scoring",
+      "expect": {
+        "primary_bundle_id": "axiomurgy_ouroboros_score_fixture",
+        "must_include_bundle_ids": ["axiomurgy_ouroboros_score_fixture"],
+        "must_not_include_bundle_ids": []
+      }
+    },
+    {
+      "path": "examples/ouroboros_score_fixture_v12.spell.json",
+      "family": "meta_scoring",
+      "expect": {
+        "primary_bundle_id": "axiomurgy_ouroboros_score_fixture_v12",
+        "must_include_bundle_ids": ["axiomurgy_ouroboros_score_fixture_v12"],
+        "must_not_include_bundle_ids": []
+      }
+    },
+    {
+      "path": "examples/calibration/readonly_probe_low_risk.spell.json",
+      "family": "negative_control",
+      "expect": {
+        "must_include_bundle_ids": [],
+        "must_not_include_bundle_ids": [
+          "axiomurgy_inbox_triage",
+          "axiomurgy_openapi_rollback",
+          "axiomurgy_research_stage",
+          "axiomurgy_primer_to_axioms",
+          "axiomurgy_primer_via_mcp",
+          "axiomurgy_primer_codex_publish",
+          "axiomurgy_ouroboros_score_fixture",
+          "axiomurgy_ouroboros_score_fixture_v12"
+        ]
+      }
+    },
+    {
+      "path": "examples/calibration/write_only_high_risk.spell.json",
+      "family": "negative_control",
+      "expect": {
+        "must_include_bundle_ids": [],
+        "must_not_include_bundle_ids": [
+          "axiomurgy_inbox_triage",
+          "axiomurgy_openapi_rollback",
+          "axiomurgy_research_stage",
+          "axiomurgy_primer_to_axioms",
+          "axiomurgy_primer_via_mcp",
+          "axiomurgy_primer_codex_publish",
+          "axiomurgy_ouroboros_score_fixture",
+          "axiomurgy_ouroboros_score_fixture_v12"
+        ]
+      }
+    }
+  ]
+}

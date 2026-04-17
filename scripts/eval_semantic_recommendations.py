@@ -7,10 +7,11 @@ Environment:
   AXIOMURGY_VERMYTH_BASE_URL or VERMYTH_BASE_URL — Vermyth HTTP base (required unless --offline)
   VERMYTH_HTTP_TOKEN / AXIOMURGY_VERMYTH_HTTP_TOKEN — optional Bearer auth
 
-Example:
-  set VERMYTH_HTTP_TOKEN=...
-  set AXIOMURGY_VERMYTH_BASE_URL=http://127.0.0.1:7777
-  python scripts/eval_semantic_recommendations.py --json
+Examples:
+  python scripts/eval_semantic_recommendations.py --json \\
+    --corpus docs/data/semantic_recommend_corpus.json --write-report docs/reports/last_calibration
+
+  python scripts/eval_semantic_recommendations.py --offline --corpus docs/data/semantic_recommend_corpus.json
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import json
 import os
 import subprocess
 import sys
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +38,8 @@ DEFAULT_SPELLS = [
     "examples/openapi_ticket_then_fail.spell.json",
     "examples/research_brief.spell.json",
 ]
+
+DEFAULT_CORPUS_REL = "docs/data/semantic_recommend_corpus.json"
 
 
 def _git_head(repo: Path) -> str | None:
@@ -59,6 +63,30 @@ def _base_url() -> str | None:
     return v.strip().rstrip("/") if isinstance(v, str) and v.strip() else None
 
 
+def load_corpus(path: Path) -> dict[str, Any]:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if "spells" not in raw or not isinstance(raw["spells"], list):
+        raise ValueError("corpus must contain a spells array")
+    return raw
+
+
+def expect_map_from_corpus(corpus: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for row in corpus["spells"]:
+        p = row.get("path")
+        if isinstance(p, str):
+            norm = p.replace("\\", "/")
+            out[norm] = row
+    return out
+
+
+def _norm_rel(path: Path, root: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(root.resolve())).replace("\\", "/")
+    except ValueError:
+        return str(path).replace("\\", "/")
+
+
 def _heuristic_miss_reasons(
     raw: dict[str, Any],
     *,
@@ -70,7 +98,6 @@ def _heuristic_miss_reasons(
         return out
     if raw.get("note"):
         out.append(f"note: {raw['note']}")
-    # Vermyth does not expose per-bundle failure reasons
     out.append(
         "zero recommendations: check target_skills includes this skill_id "
         f"({skill_id!r}), intent_subset_eq vs spell_level_vermyth_intent fields, "
@@ -86,11 +113,12 @@ def run_probe(
     skill_id: str,
     min_strength: float | None,
     timeout_s: float,
+    raw_by_path: bool = False,
 ) -> dict[str, Any]:
     client = VermythHttpClient(base_url + "/", timeout_s=timeout_s)
     runs: list[dict[str, Any]] = []
     for path in spell_paths:
-        rel = str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path)
+        rel = _norm_rel(path, ROOT)
         spell = load_spell(path)
         _text, input_payload = _recommend_input_payload(spell)
         try:
@@ -126,28 +154,170 @@ def run_probe(
                     "target_skill": r.get("target_skill"),
                 }
             )
-        runs.append(
-            {
-                "spell_path": rel,
-                "spell_name": spell.name,
-                "latency_ms": round(latency_ms, 3),
-                "recommendation_count": len(recs),
-                "recommendations": normalized,
-                "raw_skill_id_echo": raw.get("skill_id"),
-                "likely_miss_reasons_if_empty": _heuristic_miss_reasons(raw, skill_id=skill_id, recs=recs),
-            }
-        )
+        row: dict[str, Any] = {
+            "spell_path": rel,
+            "spell_name": spell.name,
+            "latency_ms": round(latency_ms, 3),
+            "recommendation_count": len(recs),
+            "recommendations": normalized,
+            "raw_skill_id_echo": raw.get("skill_id"),
+            "likely_miss_reasons_if_empty": _heuristic_miss_reasons(raw, skill_id=skill_id, recs=recs),
+        }
+        if raw_by_path:
+            row["raw_response"] = raw
+        runs.append(row)
 
     return {"runs": runs, "skill_id": skill_id, "min_strength": min_strength}
 
 
+def fetch_healthz(base_url: str, *, timeout_s: float = 5.0) -> dict[str, Any] | None:
+    try:
+        import requests
+
+        url = base_url.rstrip("/") + "/healthz"
+        r = requests.get(url, timeout=timeout_s)
+        try:
+            body = r.json()
+        except ValueError:
+            body = {"text": r.text[:500]}
+        return {"status_code": r.status_code, "body": body}
+    except OSError:
+        return None
+
+
+def classify_row(
+    run: dict[str, Any],
+    expect: dict[str, Any] | None,
+) -> str:
+    """Return calibration label: correct_match | weak_but_plausible | wrong_match | no_match | error | unknown."""
+    if run.get("error"):
+        return "error"
+    if expect is None:
+        return "unknown"
+    ex = expect.get("expect") or {}
+    must_in = list(ex.get("must_include_bundle_ids") or [])
+    must_out = list(ex.get("must_not_include_bundle_ids") or [])
+    primary = ex.get("primary_bundle_id")
+    recs = run.get("recommendations") if isinstance(run.get("recommendations"), list) else []
+    if not recs:
+        return "no_match"
+    top = recs[0]
+    tid = str(top.get("bundle_id") or "")
+    mk = str(top.get("match_kind") or "")
+
+    if must_out and tid in must_out:
+        return "wrong_match"
+
+    if not must_in:
+        return "correct_match"
+
+    if tid not in must_in:
+        return "wrong_match"
+
+    if mk == "exact":
+        return "correct_match"
+    return "weak_but_plausible"
+
+
+def rollup_calibration(
+    runs: list[dict[str, Any]],
+    corpus: dict[str, Any] | None,
+) -> dict[str, Any]:
+    expect_by_path: dict[str, dict[str, Any]] = expect_map_from_corpus(corpus) if corpus else {}
+    labeled: list[dict[str, Any]] = []
+    counts: dict[str, int] = defaultdict(int)
+    by_family: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
+    for run in runs:
+        rel = run.get("spell_path") or ""
+        rel_n = rel.replace("\\", "/")
+        row_corpus = expect_by_path.get(rel_n)
+        fam = row_corpus.get("family", "unknown") if row_corpus else "unknown"
+        label = classify_row(run, row_corpus)
+        counts[label] += 1
+        by_family[fam][label] += 1
+        ext = dict(run)
+        ext["calibration_label"] = label
+        ext["family"] = fam
+        labeled.append(ext)
+
+    positives = [r for r in labeled if r.get("family") != "negative_control"]
+    neg = [r for r in labeled if r.get("family") == "negative_control"]
+    pos_ok = sum(
+        1 for r in positives if r["calibration_label"] in ("correct_match", "weak_but_plausible")
+    )
+    neg_pass = sum(1 for r in neg if r["calibration_label"] != "wrong_match")
+
+    return {
+        "labeled_runs": labeled,
+        "counts_by_label": dict(counts),
+        "counts_by_family": {k: dict(v) for k, v in by_family.items()},
+        "metrics": {
+            "positive_correct_or_weak": {"numerator": pos_ok, "denominator": len(positives)},
+            "negative_controls_no_false_positive": {"numerator": neg_pass, "denominator": len(neg)},
+            "empty_recommendations": sum(1 for r in labeled if r["calibration_label"] == "no_match"),
+        },
+    }
+
+
+def write_markdown_summary(path: Path, report: dict[str, Any], calibration: dict[str, Any]) -> None:
+    lines = [
+        "# Semantic recommendation calibration report",
+        "",
+        f"- axiomurgy_git: `{report.get('metadata', {}).get('axiomurgy_git')}`",
+        f"- vermyth_git: `{report.get('metadata', {}).get('vermyth_git')}`",
+        f"- healthz: `{json.dumps(report.get('metadata', {}).get('healthz'), indent=None)}`",
+        "",
+        "## Counts by label",
+        "",
+    ]
+    for k, v in sorted(calibration.get("counts_by_label", {}).items()):
+        lines.append(f"- **{k}**: {v}")
+    lines.extend(["", "## By family", ""])
+    for fam, d in sorted(calibration.get("counts_by_family", {}).items()):
+        lines.append(f"### {fam}")
+        for kk, vv in sorted(d.items()):
+            lines.append(f"- {kk}: {vv}")
+        lines.append("")
+    m = calibration.get("metrics", {})
+    lines.extend(
+        [
+            "## Metrics",
+            "",
+            "```json",
+            json.dumps(m, indent=2),
+            "```",
+            "",
+            "## Per spell",
+            "",
+        ]
+    )
+    for r in calibration.get("labeled_runs", []):
+        lines.append(
+            f"- `{r.get('spell_path')}` — **{r.get('calibration_label')}** "
+            f"(top-1: `{r.get('recommendations') and r['recommendations'][0].get('bundle_id')}`)"
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Evaluate Vermyth semantic recommendations for Axiomurgy spells.")
+    ap.add_argument("--spells", nargs="*", default=None, help="Spell paths relative to repo root (default: three examples or full corpus).")
     ap.add_argument(
-        "--spells",
-        nargs="*",
-        default=DEFAULT_SPELLS,
-        help="Spell paths relative to repo root (default: three canonical examples).",
+        "--corpus",
+        default=None,
+        help=f"Corpus JSON with expectations (default path if --calibrate only: {DEFAULT_CORPUS_REL}).",
+    )
+    ap.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="Load corpus expectations and add calibration labels + metrics (use with --corpus or default corpus file).",
+    )
+    ap.add_argument(
+        "--write-report",
+        default=None,
+        metavar="PREFIX",
+        help="Write PREFIX.json and PREFIX.md (no extension).",
     )
     ap.add_argument("--base-url", default=None, help="Override AXIOMURGY_VERMYTH_BASE_URL / VERMYTH_BASE_URL")
     ap.add_argument("--skill-id", default="decide", help="Vermyth recommendation target (default: decide).")
@@ -164,9 +334,31 @@ def main() -> int:
         action="store_true",
         help="Print probe shapes only (no HTTP); includes heuristic pin metadata.",
     )
+    ap.add_argument("--include-raw", action="store_true", help="Include raw Vermyth JSON per spell in live report.")
     args = ap.parse_args()
 
-    spell_paths = [(ROOT / p).resolve() for p in args.spells]
+    if args.corpus:
+        corpus_path: Path | None = Path(args.corpus)
+    elif args.calibrate:
+        corpus_path = ROOT / DEFAULT_CORPUS_REL
+    else:
+        corpus_path = None
+
+    corpus = None
+    if corpus_path is not None:
+        if not corpus_path.is_file():
+            print(f"error: corpus file missing: {corpus_path}", file=sys.stderr)
+            return 2
+        corpus = load_corpus(corpus_path)
+
+    if args.spells:
+        rel_spells = args.spells
+    elif corpus:
+        rel_spells = [str(x["path"]) for x in corpus["spells"]]
+    else:
+        rel_spells = DEFAULT_SPELLS
+
+    spell_paths = [(ROOT / p).resolve() for p in rel_spells]
     for p in spell_paths:
         if not p.is_file():
             print(f"error: missing spell file: {p}", file=sys.stderr)
@@ -186,11 +378,11 @@ def main() -> int:
             rows.append(
                 {
                     "spell_name": spell.name,
-                    "spell_path": str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path),
+                    "spell_path": _norm_rel(path, ROOT),
                     "input": payload,
                 }
             )
-        out = {"metadata": meta, "offline_probe_inputs": rows, "skill_id": args.skill_id}
+        out: dict[str, Any] = {"metadata": meta, "offline_probe_inputs": rows, "skill_id": args.skill_id}
         print(json.dumps(out, indent=2))
         return 0
 
@@ -202,28 +394,49 @@ def main() -> int:
         )
         return 2
 
+    meta["healthz"] = fetch_healthz(base, timeout_s=min(args.timeout, 10.0))
+
+    probe_result = run_probe(
+        spell_paths,
+        base_url=base,
+        skill_id=args.skill_id,
+        min_strength=args.min_strength,
+        timeout_s=args.timeout,
+        raw_by_path=args.include_raw,
+    )
+
     report: dict[str, Any] = {
         "metadata": meta,
-        "report": run_probe(
-            spell_paths,
-            base_url=base,
-            skill_id=args.skill_id,
-            min_strength=args.min_strength,
-            timeout_s=args.timeout,
-        ),
+        "corpus_path": str(corpus_path.resolve()) if corpus_path is not None else None,
+        "report": probe_result,
     }
 
-    if args.json:
-        print(json.dumps(report, indent=2))
-        return 0
+    if args.calibrate and corpus:
+        report["calibration"] = rollup_calibration(probe_result["runs"], corpus)
 
-    print(json.dumps(report, indent=2))
-    print(
-        "\n--- pin ---\n"
-        f"axiomurgy_git={meta.get('axiomurgy_git')}\n"
-        f"vermyth_git={meta.get('vermyth_git')}",
-        file=sys.stderr,
-    )
+    out_obj = report
+    if args.json:
+        print(json.dumps(out_obj, indent=2))
+    else:
+        print(json.dumps(out_obj, indent=2))
+        print(
+            "\n--- pin ---\n"
+            f"axiomurgy_git={meta.get('axiomurgy_git')}\n"
+            f"vermyth_git={meta.get('vermyth_git')}",
+            file=sys.stderr,
+        )
+
+    if args.write_report:
+        prefix = Path(args.write_report)
+        prefix.parent.mkdir(parents=True, exist_ok=True)
+        json_path = prefix.with_suffix(".json")
+        md_path = prefix.with_suffix(".md")
+        json_path.write_text(json.dumps(out_obj, indent=2), encoding="utf-8")
+        if args.calibrate and corpus and "calibration" in report:
+            write_markdown_summary(md_path, report, report["calibration"])
+        else:
+            md_path.write_text(f"# Report\n\nSee {json_path.name}\n", encoding="utf-8")
+
     return 0
 
 
