@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "axiomurgy"
+version = "2.0.0"
+description = "Programmable magical system for AIs — permissioned causality for spell graphs."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "jsonschema>=4.20",
+    "requests>=2.31",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+axiomurgy = "axiomurgy.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["axiomurgy*"]
+
+[tool.setuptools.package-data]
+axiomurgy = [
+    "bundled/*.json",
+    "bundled/policies/*.json",
+]

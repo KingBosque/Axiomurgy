@@ -47,9 +47,10 @@ This relay upgrades the runtime from **capability-sealed execution** to **enforc
 
 ## Repository map
 
-- `axiomurgy.py` - reference runtime
-- `spell.schema.json` - spell contract
-- `spellbook.schema.json` - spellbook manifest contract
+- `pyproject.toml` - package metadata and bundled data (schemas ship under `axiomurgy/bundled/`)
+- `axiomurgy.py` - compatibility CLI shim
+- `spell.schema.json` - spell contract (mirrors `axiomurgy/bundled/spell.schema.json`; keep in sync)
+- `spellbook.schema.json` - spellbook manifest contract (mirrors `axiomurgy/bundled/spellbook.schema.json`)
 - `examples/` - direct runnable spells
 - `spellbooks/primer_codex/` - packaged proof-carrying spellbook with preflight artifacts
 - `primers/` - local copies of the seven uploaded primer transcripts
@@ -63,10 +64,25 @@ This relay upgrades the runtime from **capability-sealed execution** to **enforc
 
 ## Install
 
+From a checkout of this repository:
+
 ```bash
-cd axiomurgy_v0_6
+python -m pip install -e ".[dev]"
+```
+
+Runtime dependencies only:
+
+```bash
 python -m pip install -r requirements.txt
 ```
+
+Developer installs (tests) also:
+
+```bash
+python -m pip install -r requirements-dev.txt
+```
+
+CLI exit codes, stdout/stderr behavior, and entrypoints are summarized in [docs/CLI_CONTRACTS.md](docs/CLI_CONTRACTS.md).
 
 ## Quick start
 

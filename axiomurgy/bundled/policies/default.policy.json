@@ -1,0 +1,24 @@
+{
+  "version": "2.0.0",
+  "attestation": {
+    "undeclared_capability_severity": "mismatch",
+    "note": "Capability overreach is surfaced as an attestation mismatch by the runtime; this metadata is non-enforcing."
+  },
+  "requires_approval": [
+    {
+      "effect": ["write"],
+      "min_risk": "medium",
+      "reason": "Write effects at medium risk or above require an explicit human grant."
+    },
+    {
+      "rune": ["gate.openapi_call", "gate.mcp_call_tool"],
+      "reason": "External tool and API actions require explicit approval."
+    }
+  ],
+  "deny": [
+    {
+      "rune": ["gate.shell"],
+      "reason": "Shell execution is not part of the reference runtime."
+    }
+  ]
+}

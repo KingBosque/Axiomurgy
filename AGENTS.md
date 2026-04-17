@@ -8,6 +8,8 @@ Start here, in order:
 3. Read `NEXT_LAP_SPEC.md`.
 4. Skim `axiomurgy.py`, `spell.schema.json`, `spellbook.schema.json`, `examples/`, `spellbooks/`, `policies/`, `adapters/`, `tests/`, and `scripts/`.
 
+For a working tree, install dependencies with `python -m pip install -e ".[dev]"` from the repository root (see `README.md` and `docs/CLI_CONTRACTS.md`).
+
 ## What this repo is
 
 Axiomurgy treats AI magic as **permissioned causality**:
