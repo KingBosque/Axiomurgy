@@ -1,0 +1,98 @@
+﻿{
+  "baseline_version": 1,
+  "captured_at": "2026-04-17T00:00:00Z",
+  "axiomurgy_git": "0f01fbac22acbc466d5aba43bef0bb35c4b284ce",
+  "vermyth_git": "845e4de1cc24418a1b0e50f665ba2c9a28b9d131",
+  "healthz": null,
+  "note": "Template committed baseline: top-bundle and match_kind gates. Refresh SHAs and optional recommendations_fingerprint via live run: python scripts/eval_semantic_recommendations.py --write-baseline PATH --compare-baseline (same corpus spell list).",
+  "expectations": [
+    {
+      "spell_path": "examples/inbox_triage.spell.json",
+      "expected_top_bundle_id": "axiomurgy_inbox_triage",
+      "expected_match_kind": "exact",
+      "forbidden_top_bundle_ids": [],
+      "recommendations_fingerprint": null
+    },
+    {
+      "spell_path": "examples/openapi_ticket_then_fail.spell.json",
+      "expected_top_bundle_id": "axiomurgy_openapi_rollback",
+      "expected_match_kind": "exact",
+      "forbidden_top_bundle_ids": [],
+      "recommendations_fingerprint": null
+    },
+    {
+      "spell_path": "examples/research_brief.spell.json",
+      "expected_top_bundle_id": "axiomurgy_research_stage",
+      "expected_match_kind": "exact",
+      "forbidden_top_bundle_ids": [],
+      "recommendations_fingerprint": null
+    },
+    {
+      "spell_path": "examples/primer_to_axioms.spell.json",
+      "expected_top_bundle_id": "axiomurgy_primer_to_axioms",
+      "expected_match_kind": "exact",
+      "forbidden_top_bundle_ids": [],
+      "recommendations_fingerprint": null
+    },
+    {
+      "spell_path": "examples/primer_via_mcp.spell.json",
+      "expected_top_bundle_id": "axiomurgy_primer_via_mcp",
+      "expected_match_kind": "exact",
+      "forbidden_top_bundle_ids": [],
+      "recommendations_fingerprint": null
+    },
+    {
+      "spell_path": "spellbooks/primer_codex/spells/publish_codex.spell.json",
+      "expected_top_bundle_id": "axiomurgy_primer_codex_publish",
+      "expected_match_kind": "exact",
+      "forbidden_top_bundle_ids": [],
+      "recommendations_fingerprint": null
+    },
+    {
+      "spell_path": "examples/ouroboros_score_fixture.spell.json",
+      "expected_top_bundle_id": "axiomurgy_ouroboros_score_fixture",
+      "expected_match_kind": "exact",
+      "forbidden_top_bundle_ids": [],
+      "recommendations_fingerprint": null
+    },
+    {
+      "spell_path": "examples/ouroboros_score_fixture_v12.spell.json",
+      "expected_top_bundle_id": "axiomurgy_ouroboros_score_fixture_v12",
+      "expected_match_kind": "exact",
+      "forbidden_top_bundle_ids": [],
+      "recommendations_fingerprint": null
+    },
+    {
+      "spell_path": "examples/calibration/readonly_probe_low_risk.spell.json",
+      "expected_top_bundle_id": null,
+      "expected_match_kind": null,
+      "forbidden_top_bundle_ids": [
+        "axiomurgy_inbox_triage",
+        "axiomurgy_openapi_rollback",
+        "axiomurgy_research_stage",
+        "axiomurgy_primer_to_axioms",
+        "axiomurgy_primer_via_mcp",
+        "axiomurgy_primer_codex_publish",
+        "axiomurgy_ouroboros_score_fixture",
+        "axiomurgy_ouroboros_score_fixture_v12"
+      ],
+      "recommendations_fingerprint": null
+    },
+    {
+      "spell_path": "examples/calibration/write_only_high_risk.spell.json",
+      "expected_top_bundle_id": null,
+      "expected_match_kind": null,
+      "forbidden_top_bundle_ids": [
+        "axiomurgy_inbox_triage",
+        "axiomurgy_openapi_rollback",
+        "axiomurgy_research_stage",
+        "axiomurgy_primer_to_axioms",
+        "axiomurgy_primer_via_mcp",
+        "axiomurgy_primer_codex_publish",
+        "axiomurgy_ouroboros_score_fixture",
+        "axiomurgy_ouroboros_score_fixture_v12"
+      ],
+      "recommendations_fingerprint": null
+    }
+  ]
+}

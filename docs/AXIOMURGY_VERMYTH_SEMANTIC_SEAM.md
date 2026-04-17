@@ -41,22 +41,48 @@ Ground-truth and spell paths live in [`docs/data/semantic_recommend_corpus.json`
 | negative_control | `examples/calibration/readonly_probe_low_risk.spell.json` | (none; must not top-rank aligned bundles) |
 | negative_control | `examples/calibration/write_only_high_risk.spell.json` | (none) |
 
+### Supported vs unsupported (families)
+
+| Stability | Meaning |
+|-----------|---------|
+| **Supported (catalogued)** | Spell appears in [`docs/data/semantic_recommend_corpus.json`](../docs/data/semantic_recommend_corpus.json) with non-empty `must_include` / `primary_bundle_id` and an `axiomurgy_*` bundle id in that row. Calibrated in harness and (when applicable) in [`docs/reports/compatibility_baseline_live_v1.json`](../docs/reports/compatibility_baseline_live_v1.json). |
+| **Unsupported / exploratory** | Any spell not listed there, or workflows without an `axiomurgy_*` bundle in the Vermyth catalog. **No semantic bundle guarantee**: recommendations may be empty, generic, or drift as the catalog changes. |
+
 ## Known no-match cases (expected)
 
-- **Negative controls**: probes with scopes like `axiomurgy:calibration_readonly_low_risk` are designed not to match any `axiomurgy_*` **exact** tier; with current tiers they typically yield **zero** recommendations (no false positive from Axiomurgy-aligned bundles). Generic Vermyth bundles that require `aspects_eq` or `semantic_bundle` scope also do not match Axiomurgy `/arcane/recommend` bodies (see overlap table below).
+- **Negative controls**: probes with scopes like `axiomurgy:calibration_readonly_low_risk` are designed not to match any `axiomurgy_*` **exact** tier; with current tiers they typically yield **zero** recommendations (no false positive from Axiomurgy-aligned bundles). Generic Vermyth bundles that require `aspects_eq` or `semantic_bundle` scope also do not match Axiomurgy `/arcane/recommend` bodies (see full matrix below).
 
-## Overlap with generic Vermyth bundles (Axiomurgy probe shape)
+## All `decide` bundles that define `recommendation`
 
-For inputs produced by `spell_level_vermyth_intent` only (nested `intent`, no top-level `aspects` / `thresholds`):
+Regenerate with (from Axiomurgy repo root):
 
-| Bundle | Typical blocker for accidental Axiomurgy match |
-|--------|-----------------------------------------------|
-| `coherent_probe`, `divination_gate`, `strict_ward_probe` | `intent_subset_eq` expects `scope: semantic_bundle` and `aspects_eq` on recommend path fails (no aspects). |
-| `network_edge_ward` | `aspects_eq` + `thresholds_eq` + objective prefix. |
-| `resonance_ping_cast` | `target_skills: [cast]` — not evaluated for `skill_id: decide`. |
-| Axiomurgy-aligned `axiomurgy_*` | `intent_subset_eq` on `axiomurgy:{spell.name}` — scoped; distinct spells do not cross-match at exact tier. |
+```bash
+python scripts/dump_bundle_recommend_matrix.py
+```
 
-Residual risk is **advisory** tiers that only pin `scope`: tier strength stays near the global `min_strength` floor; tighten in Vermyth if a calibration run shows a wrong top-1.
+Snapshot (predicate summary; `scope semantic_bundle` means some tier uses `intent_subset_eq` with `scope: semantic_bundle`):
+
+| bundle_id | target_skills | aspects_eq | thresholds_eq | scope semantic_bundle | tier ops (union) |
+|-----------|---------------|------------|---------------|----------------------|------------------|
+| `axiomurgy_inbox_triage` | decide | false | false | false | `intent_subset_eq`, `objective_length_between` |
+| `axiomurgy_openapi_rollback` | decide | false | false | false | `intent_subset_eq` |
+| `axiomurgy_ouroboros_score_fixture` | decide | false | false | false | `intent_subset_eq` |
+| `axiomurgy_ouroboros_score_fixture_v12` | decide | false | false | false | `intent_subset_eq` |
+| `axiomurgy_primer_codex_publish` | decide | false | false | false | `intent_subset_eq` |
+| `axiomurgy_primer_to_axioms` | decide | false | false | false | `intent_subset_eq` |
+| `axiomurgy_primer_via_mcp` | decide | false | false | false | `intent_subset_eq` |
+| `axiomurgy_research_stage` | decide | false | false | false | `intent_subset_eq`, `objective_length_between` |
+| `coherent_probe` | decide | true | false | true | `aspects_eq`, `intent_subset_eq`, `objective_length_between`, `objective_starts_with` |
+| `divination_gate` | decide | true | false | true | `aspects_eq`, `field_eq`, `field_present`, `intent_subset_eq`, `objective_starts_with` |
+| `network_edge_ward` | decide | true | true | true | `aspects_eq`, `intent_subset_eq`, `objective_starts_with`, `thresholds_eq` |
+| `resonance_ping_cast` | cast | true | false | true | `aspects_eq`, `intent_subset_eq`, `objective_starts_with` |
+| `strict_ward_probe` | decide | true | true | true | `aspects_eq`, `intent_subset_eq`, `objective_starts_with`, `thresholds_eq` |
+
+**Axiomurgy HTTP probe** sends nested `intent` only (no top-level `aspects` / `thresholds`). Rows with `aspects_eq`, `thresholds_eq`, or `scope semantic_bundle` are **unlikely** to match the current probe unless Axiomurgy extends the recommend body. **`axiomurgy_*`** rows are **intent-only** (`axiomurgy:{spell.name}` scopes)—aligned with [`spell_level_vermyth_intent`](../axiomurgy/vermyth_export.py).
+
+### Ambiguity and tie-break
+
+Two bundles can both expose advisory tiers that only pin `scope` (cosmetic / near-duplicate risk). Today, Axiomurgy spell names map to **unique** `axiomurgy:{spell.name}` scopes, so cross-talk between different `axiomurgy_*` bundles is low. When multiple tiers match, Vermyth sorts recommendations by **`(-strength, bundle_id)`** ([`Vermyth/vermyth/arcane/recommend.py`](../../Vermyth/vermyth/arcane/recommend.py)).
 
 ## Manifest matching
 
@@ -100,9 +126,33 @@ python scripts/eval_semantic_recommendations.py --offline
 ### Pinned reports
 
 - **In-process sanity check** (same matcher as HTTP body passed to `recommend_for_plain_invocation`; no TCP): [`docs/reports/semantic_recommend_calibration_inprocess.json`](../docs/reports/semantic_recommend_calibration_inprocess.json) records git pins and per-spell rows. Refresh when bundles change.
-- **Live HTTP**: re-run the harness against your pinned Vermyth adapter and commit or archive the `PREFIX.json` output next to a dated note.
+- **Live HTTP baseline (v1)** — committed file [`docs/reports/compatibility_baseline_live_v1.json`](../docs/reports/compatibility_baseline_live_v1.json), schema [`docs/reports/compatibility_baseline_v1.schema.json`](../docs/reports/compatibility_baseline_v1.schema.json). Refresh `captured_at`, git SHAs, and optional `recommendations_fingerprint` entries after a live run on the corpus spell list:
 
-## Next refinements
+  ```bash
+  python scripts/eval_semantic_recommendations.py --write-baseline docs/reports/compatibility_baseline_live_v1.json
+  ```
 
-- Optional **live** golden run checked in when CI or a release bot can reach Vermyth.
+  Compare a live run to the baseline (exit **1** on regression; stderr shows failures):
+
+  ```bash
+  python scripts/eval_semantic_recommendations.py --compare-baseline docs/reports/compatibility_baseline_live_v1.json
+  ```
+
+  Use `--allow-sha-drift` when git pins intentionally differ locally.
+
+### Acceptance thresholds
+
+See [`docs/SEMANTIC_RECOMMEND_ACCEPTANCE.md`](SEMANTIC_RECOMMEND_ACCEPTANCE.md) for gates (positive top-1, negative FP, multi-match rate, transport errors).
+
+### Plan output: human brief
+
+When recommendations are fetched, [`fetch_semantic_recommendations`](../axiomurgy/vermyth_integration.py) adds **`summary`** (one line), **`rows`** (top bundles with optional `inspect_hint`), and **`advisory_note`** when not `ok`. These live under `plan.semantic_recommendations.*` and remain covered by the review-bundle prefix allowlist in [`axiomurgy/review.py`](../axiomurgy/review.py).
+
+## Next manifests
+
+**Default: none** for this governance pass. Add or adjust an `axiomurgy_*` Vermyth bundle only when a **live** baseline or corpus run shows a persistent `no_match` / `wrong_match` for a **positive** corpus spell after verifying URL and token—that is, evidence that the catalog lacks coverage for that family. If you add a bundle, extend the corpus line, bump **baseline_version** (or document the bump), and refresh [`compatibility_baseline_live_v1.json`](../docs/reports/compatibility_baseline_live_v1.json).
+
+Further refinements:
+
+- Optional CI job that runs `--compare-baseline` when `AXIOMURGY_VERMYTH_BASE_URL` is available.
 - Tighten **advisory** tiers only when calibration shows a wrong top-1.

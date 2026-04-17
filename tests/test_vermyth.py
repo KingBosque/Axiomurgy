@@ -39,6 +39,9 @@ class TestVermythExport(unittest.TestCase):
 
     def test_allowlist_prefix_and_non_matching_paths(self) -> None:
         # Prefix policy: anything under plan.semantic_recommendations* is skipped (see VERMYTH_GATE.md).
+        self.assertTrue(_attestation_allowlisted_path("plan.semantic_recommendations.summary"))
+        self.assertTrue(_attestation_allowlisted_path("plan.semantic_recommendations.rows"))
+        self.assertTrue(_attestation_allowlisted_path("plan.semantic_recommendations.advisory_note"))
         self.assertTrue(_attestation_allowlisted_path("plan.semantic_recommendations_extra"))
         self.assertFalse(_attestation_allowlisted_path("describe.semantic_recommendations"))
         self.assertFalse(_attestation_allowlisted_path("plan.steps"))
@@ -150,6 +153,39 @@ class TestFetchSemanticRecommendationsContract(unittest.TestCase):
         self.assertIn("intent", inp)
         self.assertIsInstance(inp["intent"], dict)
         self.assertIn("objective", inp["intent"])
+
+    @patch.dict(os.environ, {"AXIOMURGY_VERMYTH_BASE_URL": "http://127.0.0.1:9"}, clear=False)
+    @patch("axiomurgy.vermyth_integration._client")
+    def test_fetch_semantic_recommendations_includes_brief_when_ok(self, mock_client: MagicMock) -> None:
+        from axiomurgy.vermyth_integration import fetch_semantic_recommendations
+
+        mock_instance = MagicMock()
+        mock_instance.arcane_recommend.return_value = {
+            "recommendations": [
+                {
+                    "bundle_id": "axiomurgy_inbox_triage",
+                    "match_kind": "exact",
+                    "strength": 0.94,
+                    "guided_upgrade": {"inspect": {"http_get_path": "/bundles/x"}},
+                }
+            ],
+            "skill_id": "decide",
+        }
+        mock_client.return_value = mock_instance
+        spell_path = ROOT / "examples" / "inbox_triage.spell.json"
+        if not spell_path.is_file():
+            self.skipTest("example spell missing")
+        policy_path = ROOT / "axiomurgy" / "bundled" / "policies" / "default.policy.json"
+        resolved = resolve_run_target(spell_path, None, policy_path, ROOT / "artifacts")
+        out = fetch_semantic_recommendations(resolved, skill_id="decide")
+        self.assertEqual(out["status"], "ok")
+        self.assertIsInstance(out.get("summary"), str)
+        self.assertIn("axiomurgy_inbox_triage", out["summary"])
+        rows = out.get("rows")
+        self.assertIsInstance(rows, list)
+        self.assertEqual(rows[0].get("bundle_id"), "axiomurgy_inbox_triage")
+        self.assertEqual(rows[0].get("inspect_hint"), "/bundles/x")
+        self.assertIsNone(out.get("advisory_note"))
 
 
 class TestVermythGateConfig(unittest.TestCase):

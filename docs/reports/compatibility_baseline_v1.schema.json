@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://axiomurgy.local/schemas/compatibility_baseline_v1.json",
+  "title": "Vermyth semantic recommend HTTP compatibility baseline",
+  "type": "object",
+  "required": ["baseline_version", "captured_at", "axiomurgy_git", "vermyth_git", "expectations"],
+  "properties": {
+    "baseline_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Bump when corpus or bundled Vermyth manifests change intentionally."
+    },
+    "captured_at": {
+      "type": "string",
+      "description": "ISO-8601 timestamp when the live HTTP snapshot was taken."
+    },
+    "axiomurgy_git": {
+      "type": "string",
+      "minLength": 7,
+      "description": "git rev-parse HEAD in Axiomurgy checkout used for the run."
+    },
+    "vermyth_git": {
+      "type": ["string", "null"],
+      "description": "git rev-parse HEAD in Vermyth checkout used for bundled arcane bundles."
+    },
+    "healthz": {
+      "type": ["object", "null"],
+      "description": "Optional GET /healthz response body (status_code + JSON body)."
+    },
+    "note": {
+      "type": "string",
+      "description": "Operator notes (e.g. Vermyth image tag)."
+    },
+    "expectations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["spell_path"],
+        "properties": {
+          "spell_path": {
+            "type": "string",
+            "description": "Path relative to Axiomurgy repo root, forward slashes."
+          },
+          "expected_top_bundle_id": {
+            "type": ["string", "null"],
+            "description": "Null for negative controls or empty-ok spells."
+          },
+          "expected_match_kind": {
+            "type": ["string", "null"],
+            "enum": ["exact", "advisory", null]
+          },
+          "forbidden_top_bundle_ids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "For negative controls: top-1 must not be any of these."
+          },
+          "recommendations_fingerprint": {
+            "type": ["string", "null"],
+            "description": "Optional sha256 prefix of canonical JSON for recommendations[] slice to detect drift."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": true
+}

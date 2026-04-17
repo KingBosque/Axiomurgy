@@ -12,18 +12,26 @@ Examples:
     --corpus docs/data/semantic_recommend_corpus.json --write-report docs/reports/last_calibration
 
   python scripts/eval_semantic_recommendations.py --offline --corpus docs/data/semantic_recommend_corpus.json
+
+  python scripts/eval_semantic_recommendations.py --write-baseline docs/reports/compatibility_baseline_live_v1.json
+
+  python scripts/eval_semantic_recommendations.py --compare-baseline docs/reports/compatibility_baseline_live_v1.json --allow-sha-drift
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
 import sys
 from collections import defaultdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+BASELINE_VERSION = 1
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -85,6 +93,175 @@ def _norm_rel(path: Path, root: Path) -> str:
         return str(path.resolve().relative_to(root.resolve())).replace("\\", "/")
     except ValueError:
         return str(path).replace("\\", "/")
+
+
+def normalize_recommendation_entry(r: dict[str, Any]) -> dict[str, Any]:
+    """Same shape as ``run_probe`` normalized recommendations (stable for fingerprints)."""
+    return {
+        "bundle_id": r.get("bundle_id"),
+        "version": r.get("version"),
+        "match_kind": r.get("match_kind"),
+        "strength": r.get("strength"),
+        "target_skill": r.get("target_skill"),
+    }
+
+
+def fingerprint_from_normalized_recs(recs: list[dict[str, Any]]) -> str:
+    norm = [normalize_recommendation_entry(r) for r in recs if isinstance(r, dict)]
+    raw = json.dumps(norm, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def expectations_from_corpus(corpus: dict[str, Any]) -> list[dict[str, Any]]:
+    """Turn corpus ``spells`` into baseline expectation rows."""
+    out: list[dict[str, Any]] = []
+    for row in corpus["spells"]:
+        p = str(row.get("path") or "").replace("\\", "/")
+        ex = row.get("expect") or {}
+        fam = row.get("family")
+        must_in = list(ex.get("must_include_bundle_ids") or [])
+        must_out = list(ex.get("must_not_include_bundle_ids") or [])
+        primary = ex.get("primary_bundle_id")
+        if fam == "negative_control":
+            out.append(
+                {
+                    "spell_path": p,
+                    "expected_top_bundle_id": None,
+                    "expected_match_kind": None,
+                    "forbidden_top_bundle_ids": must_out,
+                    "recommendations_fingerprint": None,
+                }
+            )
+        else:
+            top = must_in[0] if must_in else primary
+            out.append(
+                {
+                    "spell_path": p,
+                    "expected_top_bundle_id": top,
+                    "expected_match_kind": "exact",
+                    "forbidden_top_bundle_ids": [],
+                    "recommendations_fingerprint": None,
+                }
+            )
+    return out
+
+
+def merge_expectations_with_run_fingerprints(
+    expectations: list[dict[str, Any]],
+    runs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    by_path = {str(r.get("spell_path") or "").replace("\\", "/"): r for r in runs}
+    merged: list[dict[str, Any]] = []
+    for exp in expectations:
+        p = str(exp["spell_path"]).replace("\\", "/")
+        run = by_path.get(p)
+        e = dict(exp)
+        if (
+            run
+            and not run.get("error")
+            and isinstance(run.get("recommendations"), list)
+        ):
+            recs = [x for x in run["recommendations"] if isinstance(x, dict)]
+            e["recommendations_fingerprint"] = fingerprint_from_normalized_recs(recs)
+        merged.append(e)
+    return merged
+
+
+def build_baseline_payload(
+    *,
+    metadata: dict[str, Any],
+    corpus: dict[str, Any],
+    runs: list[dict[str, Any]],
+    note: str | None = None,
+) -> dict[str, Any]:
+    exp = merge_expectations_with_run_fingerprints(expectations_from_corpus(corpus), runs)
+    cap = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return {
+        "baseline_version": BASELINE_VERSION,
+        "captured_at": cap,
+        "axiomurgy_git": metadata.get("axiomurgy_git"),
+        "vermyth_git": metadata.get("vermyth_git"),
+        "healthz": metadata.get("healthz"),
+        "note": note
+        or "HTTP baseline; refresh with: python scripts/eval_semantic_recommendations.py --calibrate --write-baseline PATH",
+        "expectations": exp,
+    }
+
+
+def compare_to_baseline(
+    baseline: dict[str, Any],
+    *,
+    current_meta: dict[str, Any],
+    runs: list[dict[str, Any]],
+    allow_sha_drift: bool,
+) -> tuple[bool, list[str]]:
+    """Return (ok, failure_messages). On regression, stderr should print the first spell-related failure."""
+    failures: list[str] = []
+    ag = baseline.get("axiomurgy_git")
+    vg = baseline.get("vermyth_git")
+    if not allow_sha_drift:
+        if ag and current_meta.get("axiomurgy_git") != ag:
+            failures.append(
+                f"meta: axiomurgy_git drift baseline={ag!r} current={current_meta.get('axiomurgy_git')!r}"
+            )
+        if vg and current_meta.get("vermyth_git") != vg:
+            failures.append(
+                f"meta: vermyth_git drift baseline={vg!r} current={current_meta.get('vermyth_git')!r}"
+            )
+
+    by_path = {str(r.get("spell_path") or "").replace("\\", "/"): r for r in runs}
+
+    for exp in baseline.get("expectations") or []:
+        sp = str(exp.get("spell_path") or "").replace("\\", "/")
+        run = by_path.get(sp)
+        if not run:
+            failures.append(f"{sp}: missing run in probe result")
+            continue
+        if run.get("error"):
+            failures.append(f"{sp}: transport error: {run.get('error')}")
+            continue
+
+        recs = run.get("recommendations") if isinstance(run.get("recommendations"), list) else []
+        recs_dicts = [x for x in recs if isinstance(x, dict)]
+        exp_top = exp.get("expected_top_bundle_id")
+        forbidden = list(exp.get("forbidden_top_bundle_ids") or [])
+
+        if exp_top is None:
+            if recs_dicts:
+                tid = str(recs_dicts[0].get("bundle_id") or "")
+                if tid in forbidden:
+                    failures.append(
+                        f"{sp}: negative control forbids top bundle {tid!r} (forbidden={forbidden})"
+                    )
+            fp_exp = exp.get("recommendations_fingerprint")
+            if fp_exp is not None:
+                got = fingerprint_from_normalized_recs(recs_dicts)
+                if got != fp_exp:
+                    failures.append(f"{sp}: recommendations_fingerprint mismatch (negative)")
+        else:
+            if not recs_dicts:
+                failures.append(f"{sp}: expected top bundle {exp_top!r} but recommendations empty")
+                continue
+            top = recs_dicts[0]
+            tid = str(top.get("bundle_id") or "")
+            if tid != str(exp_top):
+                failures.append(
+                    f"{sp}: top bundle {tid!r} != baseline expected_top {str(exp_top)!r}"
+                )
+            emk = exp.get("expected_match_kind")
+            if emk:
+                mk = str(top.get("match_kind") or "")
+                if mk != str(emk):
+                    failures.append(
+                        f"{sp}: match_kind {mk!r} != baseline expected {str(emk)!r}"
+                    )
+            fp_exp = exp.get("recommendations_fingerprint")
+            if fp_exp:
+                got = fingerprint_from_normalized_recs(recs_dicts)
+                if got != fp_exp:
+                    failures.append(f"{sp}: recommendations_fingerprint mismatch")
+
+    return (len(failures) == 0, failures)
 
 
 def _heuristic_miss_reasons(
@@ -247,6 +424,7 @@ def rollup_calibration(
         1 for r in positives if r["calibration_label"] in ("correct_match", "weak_but_plausible")
     )
     neg_pass = sum(1 for r in neg if r["calibration_label"] != "wrong_match")
+    multi = sum(1 for r in labeled if (r.get("recommendation_count") or 0) > 1)
 
     return {
         "labeled_runs": labeled,
@@ -256,6 +434,10 @@ def rollup_calibration(
             "positive_correct_or_weak": {"numerator": pos_ok, "denominator": len(positives)},
             "negative_controls_no_false_positive": {"numerator": neg_pass, "denominator": len(neg)},
             "empty_recommendations": sum(1 for r in labeled if r["calibration_label"] == "no_match"),
+            "multi_match_rate": {
+                "numerator": multi,
+                "denominator": len(labeled),
+            },
         },
     }
 
@@ -335,11 +517,32 @@ def main() -> int:
         help="Print probe shapes only (no HTTP); includes heuristic pin metadata.",
     )
     ap.add_argument("--include-raw", action="store_true", help="Include raw Vermyth JSON per spell in live report.")
+    ap.add_argument(
+        "--write-baseline",
+        default=None,
+        metavar="PATH",
+        help="After a live probe against the corpus spell list, write a v1 compatibility_baseline JSON (for committing).",
+    )
+    ap.add_argument(
+        "--compare-baseline",
+        default=None,
+        metavar="PATH",
+        help="After a live probe, compare to a committed baseline; exit 1 on regression (stderr: first failure).",
+    )
+    ap.add_argument(
+        "--allow-sha-drift",
+        action="store_true",
+        help="With --compare-baseline, do not fail when axiomurgy_git / vermyth_git differ from the baseline.",
+    )
     args = ap.parse_args()
+
+    if args.offline and (args.write_baseline or args.compare_baseline):
+        print("error: --write-baseline and --compare-baseline require live HTTP", file=sys.stderr)
+        return 2
 
     if args.corpus:
         corpus_path: Path | None = Path(args.corpus)
-    elif args.calibrate:
+    elif args.calibrate or args.write_baseline or args.compare_baseline:
         corpus_path = ROOT / DEFAULT_CORPUS_REL
     else:
         corpus_path = None
@@ -437,7 +640,38 @@ def main() -> int:
         else:
             md_path.write_text(f"# Report\n\nSee {json_path.name}\n", encoding="utf-8")
 
-    return 0
+    exit_code = 0
+    if args.write_baseline:
+        if corpus is None:
+            print(
+                "error: --write-baseline requires corpus expectations (use --corpus or rely on default file)",
+                file=sys.stderr,
+            )
+            return 2
+        bl = build_baseline_payload(metadata=meta, corpus=corpus, runs=probe_result["runs"])
+        wpath = Path(args.write_baseline)
+        wpath.parent.mkdir(parents=True, exist_ok=True)
+        wpath.write_text(json.dumps(bl, indent=2) + "\n", encoding="utf-8")
+    if args.compare_baseline:
+        bpath = Path(args.compare_baseline)
+        if not bpath.is_file():
+            print(f"error: baseline file not found: {bpath}", file=sys.stderr)
+            return 2
+        baseline_obj = json.loads(bpath.read_text(encoding="utf-8"))
+        ok, fails = compare_to_baseline(
+            baseline_obj,
+            current_meta=meta,
+            runs=probe_result["runs"],
+            allow_sha_drift=args.allow_sha_drift,
+        )
+        if not ok:
+            if fails:
+                print(fails[0], file=sys.stderr)
+                for line in fails[1:]:
+                    print(line, file=sys.stderr)
+            exit_code = 1
+
+    return exit_code
 
 
 if __name__ == "__main__":

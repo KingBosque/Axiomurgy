@@ -39,6 +39,44 @@ def _hash_hint(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+def _brief_semantic_recommendations(rec: Dict[str, Any]) -> None:
+    """Add human-facing summary/rows (and advisory_note on failure) in place."""
+    st = rec.get("status")
+    if st != "ok":
+        reason = rec.get("reason") or st
+        rec["advisory_note"] = f"Semantic recommendations unavailable ({reason})."
+        rec["summary"] = None
+        rec["rows"] = []
+        return
+    items = rec.get("items") if isinstance(rec.get("items"), list) else []
+    rows: List[Dict[str, Any]] = []
+    for it in items[:5]:
+        if not isinstance(it, dict):
+            continue
+        row: Dict[str, Any] = {
+            "bundle_id": it.get("bundle_id"),
+            "match_kind": it.get("match_kind"),
+            "strength": it.get("strength"),
+        }
+        gu = it.get("guided_upgrade") if isinstance(it.get("guided_upgrade"), dict) else {}
+        ins = gu.get("inspect") if isinstance(gu.get("inspect"), dict) else {}
+        p = ins.get("http_get_path")
+        if isinstance(p, str) and p.strip():
+            row["inspect_hint"] = p.strip()
+        rows.append(row)
+    lat = rec.get("latency_ms")
+    if rows:
+        t0 = rows[0]
+        rec["summary"] = (
+            f"top={t0.get('bundle_id')} kind={t0.get('match_kind')} strength={t0.get('strength')} "
+            f"latency_ms={lat}"
+        )
+    else:
+        rec["summary"] = "no recommendations (empty list)"
+    rec["rows"] = rows
+    rec["advisory_note"] = None
+
+
 def _recommend_input_payload(spell: Spell) -> tuple[str, Dict[str, Any]]:
     """Plain-text fingerprint line and task-shaped Vermyth `input` dict for /arcane/recommend."""
     summary_bits = [
@@ -57,18 +95,20 @@ def fetch_semantic_recommendations(resolved: ResolvedRunTarget, *, skill_id: str
     input_text, input_payload = _recommend_input_payload(spell)
     client = _client()
     if client is None:
-        return {
+        out = {
             "status": "unavailable",
             "source": "vermyth",
             "reason": "AXIOMURGY_VERMYTH_BASE_URL not set",
             "input_sha256": _hash_hint(input_text),
             "items": [],
         }
+        _brief_semantic_recommendations(out)
+        return out
     try:
         raw, latency_ms = VermythHttpClient.timed_call(
             lambda: client.arcane_recommend(skill_id=skill_id, input_=input_payload)
         )
-        return {
+        out = {
             "status": "ok",
             "source": "vermyth",
             "latency_ms": round(latency_ms, 3),
@@ -76,14 +116,18 @@ def fetch_semantic_recommendations(resolved: ResolvedRunTarget, *, skill_id: str
             "raw": raw,
             "items": raw.get("recommendations") if isinstance(raw.get("recommendations"), list) else [],
         }
+        _brief_semantic_recommendations(out)
+        return out
     except (VermythHttpError, requests.RequestException, OSError, ValueError) as exc:
-        return {
+        out = {
             "status": "error",
             "source": "vermyth",
             "reason": str(exc),
             "input_sha256": _hash_hint(input_text),
             "items": [],
         }
+        _brief_semantic_recommendations(out)
+        return out
 
 
 def compile_program_preview(program: Dict[str, Any]) -> Dict[str, Any]:
