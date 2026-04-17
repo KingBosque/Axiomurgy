@@ -225,6 +225,45 @@ class AxiomurgyRuntimeTests(unittest.TestCase):
             self.assertTrue(any(r.get("accepted") for r in witness.get("revolutions", [])))
             self.assertTrue(any(r.get("rejected") for r in witness.get("revolutions", [])))
 
+    def test_ouroboros_surfaces_vermyth_gate_in_result_and_artifacts(self):
+        resolved = self.runtime.resolve_run_target(ROOT / "examples" / "ouroboros_score_fixture.spell.json", None, None, None)
+        gate = {"status": "advisory", "surfaced": True}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            resolved.artifact_dir = Path(tmpdir)
+            cfg = {
+                "max_revolutions": 1,
+                "flux_budget": 1,
+                "plateau_window": 1,
+                "target_metric": {"kind": "fixture_score", "path": "ouroboros_score.json"},
+                "mutation_target_allowlist": ["spell.inputs.score"],
+                "mutation_targets": [{"path": "spell.inputs.score", "choices": [2.0]}],
+                "rollback_mode": "shadow_copy",
+                "stop_conditions": {"max_failures": 3, "min_improvement": 0.0, "no_improve_for": 2},
+                "run_capsule": {"enabled": False},
+            }
+            cfg_path = Path(tmpdir) / "cycle.json"
+            cfg_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+            result = self.runtime.ouroboros_chamber(
+                resolved,
+                cycle_config_path=cfg_path,
+                approvals=set(),
+                simulate=False,
+                reviewed_bundle=None,
+                enforce_review_bundle=False,
+                vermyth_gate_record=gate,
+            )
+            self.assertEqual(result.get("vermyth_gate"), gate)
+            vgp = Path(result["vermyth_gate_path"])
+            self.assertTrue(vgp.is_file())
+            self.assertEqual(json.loads(vgp.read_text(encoding="utf-8")), gate)
+            witness = json.loads(Path(result["ouroboros_witness_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(witness.get("vermyth_gate"), gate)
+            rel = witness.get("key_artifact_paths_relative") or {}
+            self.assertIn("vermyth_gate", rel)
+            manifest = json.loads(Path(result["run_manifest_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(manifest.get("vermyth_gate"), gate)
+            self.assertIn("vermyth_gate_path", manifest)
+
     def test_ouroboros_mutation_allowlist_blocks(self):
         resolved = self.runtime.resolve_run_target(ROOT / "examples" / "ouroboros_score_fixture.spell.json", None, None, None)
         with tempfile.TemporaryDirectory() as tmpdir:

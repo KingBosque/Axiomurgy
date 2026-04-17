@@ -1962,6 +1962,10 @@ def ouroboros_chamber(
     simulate: bool,
     reviewed_bundle: Optional[Dict[str, Any]],
     enforce_review_bundle: bool,
+    vermyth_gate_record: Optional[Dict[str, Any]] = None,
+    vermyth_policy_notes: Optional[Sequence[str]] = None,
+    vermyth_receipt_emit: bool = False,
+    reviewed_bundle_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     cfg = load_cycle_config(cycle_config_path)
     run_capsule_cfg = cfg["run_capsule"]
@@ -2042,6 +2046,10 @@ def ouroboros_chamber(
         art,
         reviewed_bundle=reviewed_bundle,
         enforce_review_bundle=enforce_review_bundle,
+        vermyth_policy_notes=vermyth_policy_notes,
+        vermyth_gate_record=vermyth_gate_record,
+        reviewed_bundle_path=reviewed_bundle_path,
+        vermyth_receipt_emit=vermyth_receipt_emit,
     )
     baseline_score = float("-inf")
     if baseline_result.get("status") == "succeeded":
@@ -2594,12 +2602,18 @@ def ouroboros_chamber(
     sn = resolved.spell.name
     ouro_raw_path = art / f"{sn}.ouroboros.raw.json"
     ouro_diff_path = art / f"{sn}.ouroboros.json"
+    vermyth_gate_diff_path: Optional[Path] = None
+    if vermyth_gate_record is not None:
+        vermyth_gate_diff_path = art / f"{sn}.vermyth_gate.json"
+        vermyth_gate_diff_path.write_text(canonical_json(vermyth_gate_record), encoding="utf-8")
     key_paths_for_run: Dict[str, Path] = {
         "ouroboros_witness_raw": ouro_raw_path,
         "ouroboros_witness_diff": ouro_diff_path,
         "proposal_plan_raw": proposal_plan_raw_path,
         "proposal_plan_diff": proposal_plan_diff_path,
     }
+    if vermyth_gate_diff_path is not None:
+        key_paths_for_run["vermyth_gate"] = vermyth_gate_diff_path
     for cap in revolution_capsules:
         rel = cap.get("artifact_root_relative")
         if isinstance(rel, str) and rel:
@@ -2642,6 +2656,8 @@ def ouroboros_chamber(
         "key_artifact_paths_relative": key_artifact_paths_relative,
         "nondeterministic_fields": [],
     }
+    if vermyth_gate_record is not None:
+        witness["vermyth_gate"] = vermyth_gate_record
     ouro_raw_path.write_text(canonical_json(witness), encoding="utf-8")
     ouro_diff_path.write_text(
         canonical_json(normalize_paths_for_portability(json.loads(canonical_json(witness)), repo_root=ROOT)),
@@ -2670,10 +2686,14 @@ def ouroboros_chamber(
         "revolution_count_skipped": revolution_count_skipped,
         "revolution_artifact_roots": revolution_artifact_roots,
     }
+    if vermyth_gate_record is not None:
+        manifest_doc["vermyth_gate"] = vermyth_gate_record
+        if vermyth_gate_diff_path is not None:
+            manifest_doc["vermyth_gate_path"] = str(vermyth_gate_diff_path)
     run_manifest_diff_path, run_manifest_raw_path = write_ouroboros_run_manifest(art, sn, manifest_doc)
     _maybe_prune_old_run_capsules(base_artifact_dir, run_capsule_cfg)
 
-    return {
+    cycle_result: Dict[str, Any] = {
         "mode": "cycle",
         "status": "completed",
         "stop_reason": stop_reason,
@@ -2702,6 +2722,11 @@ def ouroboros_chamber(
         "revolution_count_skipped": revolution_count_skipped,
         "revolution_artifact_roots": revolution_artifact_roots,
     }
+    if vermyth_gate_record is not None:
+        cycle_result["vermyth_gate"] = vermyth_gate_record
+        if vermyth_gate_diff_path is not None:
+            cycle_result["vermyth_gate_path"] = str(vermyth_gate_diff_path)
+    return cycle_result
 
 
 def coerce_text(ctx: RuneContext, value: Any) -> str:
@@ -3428,6 +3453,10 @@ def main(argv: Sequence[str]) -> int:
                         simulate=bool(args.simulate),
                         reviewed_bundle=reviewed_in,
                         enforce_review_bundle=bool(args.enforce_review_bundle),
+                        vermyth_gate_record=gate_for_result,
+                        vermyth_policy_notes=v_notes,
+                        vermyth_receipt_emit=rec_emit,
+                        reviewed_bundle_path=rb_path,
                     )
                 else:
                     result = execute_spell(

@@ -53,7 +53,7 @@ When `main` resolves a target:
 1. **Replay** (`--replay-revolution-dir` / `--replay-run-manifest`): branches to `replay_ouroboros_revolution` **before** `run_vermyth_gate`. No Vermyth gate HTTP call, no `vermyth_gate` on that JSON.
 2. **Describe / plan / lint / review-bundle / verify**: no gate (gate runs only in the execution branch below).
 3. **Execution** (`--cycle-config` absent): `run_vermyth_gate` runs, then `execute_spell`. Result may include `vermyth_gate` and optional receipt paths.
-4. **Ouroboros** (`--cycle-config`): `run_vermyth_gate` still runs first (network side effect if enabled), then `ouroboros_chamber`. The cycle result JSON does **not** attach `vermyth_gate` or `vermyth_receipt_path` from the gate path; the gate is advisory/latency for this flow only.
+4. **Ouroboros** (`--cycle-config`): `run_vermyth_gate` still runs first (network side effect if enabled), then `ouroboros_chamber`. When the gate is not skipped (same rule as plain execution: `vermyth_gate` omitted when `status == skipped`), the cycle result JSON includes **`vermyth_gate`**, optional **`vermyth_gate_path`** (sidecar `<spell>.vermyth_gate.json` under the run artifact root), and the same fields on **`*.ouroboros.json`** / **`run_manifest`** witnesses. **`vermyth_receipt_path`** may appear when receipt emission is enabled, from the **baseline** `execute_spell` inside the chamber (veil executions do not re-run the gate or merge `policy_input` notes).
 
 See [CLI_CONTRACTS.md](CLI_CONTRACTS.md) for exit codes and streams.
 
@@ -63,7 +63,7 @@ Optional HTTP tests against a real Vermyth server are marked `vermyth_live` and 
 
 ## Ranked compatibility risks
 
-1. **High:** Ouroboros with `vermyth_gate.enabled` triggers extra HTTP calls every invocation; the gate outcome is not surfaced on the cycle result JSON.
+1. **Medium:** Ouroboros with `vermyth_gate.enabled` triggers an extra HTTP call every invocation (plus baseline execution work inside the chamber).
 2. **Medium:** Vermyth API drift for `decide` / HTTP paths.
 3. **Medium:** `on_timeout` naming vs behavior (missing URL and HTTP errors use the same `deny` branch).
 4. **Low:** Allowlist prefix `plan.semantic_recommendations` could shadow a future sibling key if both were compared.

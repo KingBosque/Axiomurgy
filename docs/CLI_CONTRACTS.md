@@ -80,7 +80,7 @@ flowchart TD
   cycleCheck -->|no| executeSpell[execute_spell]
 ```
 
-Replay does not call the gate. Ouroboros calls the gate before the chamber, but the cycle JSON does not include `vermyth_gate` from that path (see [VERMYTH_GATE.md](VERMYTH_GATE.md)).
+Replay does not call the gate. Ouroboros calls the gate before the chamber; when the gate is not skipped, cycle JSON and run artifacts include `vermyth_gate` (see [VERMYTH_GATE.md](VERMYTH_GATE.md)).
 
 ### Baseline without Vermyth flags
 
