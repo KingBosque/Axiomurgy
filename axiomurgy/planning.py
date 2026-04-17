@@ -422,6 +422,10 @@ def build_plan_summary(
     resolved: ResolvedRunTarget,
     approvals: Optional[Set[str]] = None,
     simulate: bool = False,
+    *,
+    vermyth_program: bool = False,
+    vermyth_validate: bool = False,
+    vermyth_recommendations: bool = False,
 ) -> Dict[str, Any]:
     approvals = approvals or set()
     policy = load_json(resolved.policy_path)
@@ -519,4 +523,14 @@ def build_plan_summary(
             "entrypoint": resolved.entrypoint,
             "path": str(resolved.spellbook.source_path),
         }
+    if vermyth_program or vermyth_validate or vermyth_recommendations:
+        from . import vermyth_integration
+
+        vermyth_integration.enrich_plan_output(
+            out,
+            resolved,
+            vermyth_program=vermyth_program,
+            vermyth_validate=vermyth_validate,
+            vermyth_recommendations=vermyth_recommendations,
+        )
     return out

@@ -3219,6 +3219,32 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default=None,
         help="v2.0: output directory for replay witnesses (default: temp dir derived from revolution path)",
     )
+    parser.add_argument(
+        "--export-vermyth-program",
+        default=None,
+        metavar="PATH",
+        help="Write Vermyth SemanticProgram JSON to PATH and exit (standalone; no --describe/--plan/--lint/--review-bundle)",
+    )
+    parser.add_argument(
+        "--vermyth-program",
+        action="store_true",
+        help="Include vermyth_program_export in --plan / --review-bundle output",
+    )
+    parser.add_argument(
+        "--vermyth-validate",
+        action="store_true",
+        help="Attach vermyth_program_preview via Vermyth compile_program (needs AXIOMURGY_VERMYTH_BASE_URL)",
+    )
+    parser.add_argument(
+        "--vermyth-recommendations",
+        action="store_true",
+        help="Include semantic_recommendations in plan output (needs AXIOMURGY_VERMYTH_BASE_URL)",
+    )
+    parser.add_argument(
+        "--vermyth-receipt",
+        action="store_true",
+        help="When recording witnesses, also write *.vermyth_receipt.json (unsigned mapping)",
+    )
     return parser.parse_args(argv)
 
 
@@ -3261,6 +3287,14 @@ def main(argv: Sequence[str]) -> int:
     if args.manifest_out and not (args.plan or args.review_bundle):
         print("ERROR: --manifest-out can only be used with --plan or --review-bundle")
         return 2
+    if args.export_vermyth_program and (
+        args.describe or args.plan or args.lint or args.review_bundle or args.verify_review_bundle or args.cycle_config
+    ):
+        print(
+            "ERROR: --export-vermyth-program is standalone only "
+            "(do not combine with --describe/--plan/--lint/--review-bundle/--verify-review-bundle/--cycle-config)"
+        )
+        return 2
     if args.enforce_review_bundle and not args.review_bundle_in:
         print("ERROR: --enforce-review-bundle requires --review-bundle-in")
         return 2
@@ -3273,6 +3307,15 @@ def main(argv: Sequence[str]) -> int:
     try:
         policy_override = Path(args.policy).resolve() if args.policy else None
         artifact_override = Path(args.artifact_dir).resolve() if args.artifact_dir else None
+        if args.export_vermyth_program:
+            resolved = resolve_run_target(target, args.entrypoint, policy_override, artifact_override)
+            from .vermyth_export import build_vermyth_program_export
+
+            out_path = Path(args.export_vermyth_program).resolve()
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(json_dumps(build_vermyth_program_export(resolved.spell)), encoding="utf-8")
+            print(json_dumps({"mode": "export_vermyth_program", "path": str(out_path)}))
+            return 0
         if args.lint:
             result = lint_target(target, policy_override=policy_override)
         else:
@@ -3339,14 +3382,27 @@ def main(argv: Sequence[str]) -> int:
                 print(json_dumps(result))
                 return 0 if result["status"] in ("exact", "partial") else 3
             elif args.review_bundle:
-                result = build_review_bundle(resolved, approvals=set(args.approve))
+                result = build_review_bundle(
+                    resolved,
+                    approvals=set(args.approve),
+                    vermyth_program=bool(args.vermyth_program),
+                    vermyth_validate=bool(args.vermyth_validate),
+                    vermyth_recommendations=bool(args.vermyth_recommendations),
+                )
                 if args.manifest_out:
                     manifest_path = Path(args.manifest_out).resolve()
                     manifest_path.parent.mkdir(parents=True, exist_ok=True)
                     manifest_path.write_text(json_dumps(result["approval_manifest"]), encoding="utf-8")
                     result["manifest_path"] = str(manifest_path)
             elif args.plan:
-                result = build_plan_summary(resolved, approvals=set(args.approve), simulate=False)
+                result = build_plan_summary(
+                    resolved,
+                    approvals=set(args.approve),
+                    simulate=False,
+                    vermyth_program=bool(args.vermyth_program),
+                    vermyth_validate=bool(args.vermyth_validate),
+                    vermyth_recommendations=bool(args.vermyth_recommendations),
+                )
                 if args.manifest_out:
                     manifest_path = Path(args.manifest_out).resolve()
                     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3356,6 +3412,14 @@ def main(argv: Sequence[str]) -> int:
                 capabilities = {"read", "memory", "reason", "transform", "verify", "approve", "simulate", "write"}
                 capabilities.update(args.capability)
                 reviewed_in = load_json(Path(args.review_bundle_in).resolve()) if args.review_bundle_in else None
+                from . import vermyth_integration as _vermyth
+
+                policy_doc = load_json(resolved.policy_path)
+                gate_record = _vermyth.run_vermyth_gate(resolved.spell, policy_doc)
+                gate_for_result = None if gate_record.get("status") == "skipped" else gate_record
+                v_notes = _vermyth.vermyth_gate_policy_notes(gate_record)
+                rec_emit = bool(args.vermyth_receipt) or _vermyth.should_emit_receipt()
+                rb_path = str(Path(args.review_bundle_in).resolve()) if args.review_bundle_in else None
                 if args.cycle_config:
                     result = ouroboros_chamber(
                         resolved,
@@ -3375,6 +3439,10 @@ def main(argv: Sequence[str]) -> int:
                         resolved.artifact_dir,
                         reviewed_bundle=reviewed_in,
                         enforce_review_bundle=bool(args.enforce_review_bundle),
+                        vermyth_policy_notes=v_notes,
+                        vermyth_gate_record=gate_for_result,
+                        reviewed_bundle_path=rb_path,
+                        vermyth_receipt_emit=rec_emit,
                     )
                 if args.review_bundle_in:
                     reviewed = load_json(Path(args.review_bundle_in).resolve())

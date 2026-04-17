@@ -27,6 +27,7 @@ from .planning import (
 from .runes import REGISTRY
 from .util import DEFAULT_SCHEMA_PATH, DEFAULT_SPELLBOOK_SCHEMA_PATH, ROOT
 from .fingerprint import compute_spell_fingerprints, compute_spellbook_fingerprints
+from .culture import culture_hints_for_describe
 
 def describe_target(resolved: ResolvedRunTarget) -> Dict[str, Any]:
     repo_root = ROOT
@@ -65,6 +66,9 @@ def describe_target(resolved: ResolvedRunTarget) -> Dict[str, Any]:
             "validators": resolved.spellbook.validators,
             "entrypoints": resolved.spellbook.entrypoints,
         }
+    ch = culture_hints_for_describe()
+    if ch is not None:
+        description["culture"] = ch
     return description
 
 

@@ -77,6 +77,8 @@ class RuneContext:
         self.reviewed_capability_envelope: Optional[Set[str]] = None
         self.enforce_review_bundle: bool = False
         self.capability_denials: List[Dict[str, Any]] = []
+        self.vermyth_policy_notes: List[str] = []
+        self._vermyth_notes_merged: bool = False
 
     def record_capability_event(
         self,
@@ -215,7 +217,17 @@ def evaluate_policy(ctx: RuneContext, step: Step) -> PolicyDecision:
         rune=step.rune,
         target={"effect": step.effect},
     )
-    return evaluate_policy_static(ctx.spell, ctx.policy, ctx.approvals, ctx.simulate, step)
+    decision = evaluate_policy_static(ctx.spell, ctx.policy, ctx.approvals, ctx.simulate, step)
+    if ctx.vermyth_policy_notes and not ctx._vermyth_notes_merged:
+        ctx._vermyth_notes_merged = True
+        decision = PolicyDecision(
+            allowed=decision.allowed,
+            requires_approval=decision.requires_approval,
+            approved=decision.approved,
+            simulated=decision.simulated,
+            reasons=list(decision.reasons) + ctx.vermyth_policy_notes,
+        )
+    return decision
 
 
 def apply_output_schema(step: Step, value: Any, spell: Spell) -> None:
@@ -397,7 +409,9 @@ def build_scxml(spell: Spell, plan: List[Step]) -> str:
     return "\n".join(lines)
 
 
-def export_witnesses(ctx: RuneContext, plan: List[Step], trace: Dict[str, Any]) -> None:
+def export_witnesses(
+    ctx: RuneContext, plan: List[Step], trace: Dict[str, Any], *, vermyth_receipt: Optional[Dict[str, Any]] = None
+) -> None:
     ctx.record_capability_event(kind="witness.emit", target={"artifact_dir": str(ctx.artifact_dir)})
     prov = build_prov_document(ctx, plan)
     proofs = build_proof_summary(ctx.proofs)
@@ -410,6 +424,11 @@ def export_witnesses(ctx: RuneContext, plan: List[Step], trace: Dict[str, Any]) 
     ctx.write_text(ctx.artifact_dir / f"{ctx.spell.name}.prov.json", canonical_json(normalize_prov_for_diff(prov)))
     ctx.write_text(ctx.artifact_dir / f"{ctx.spell.name}.scxml", build_scxml(ctx.spell, plan))
     ctx.write_text(ctx.artifact_dir / f"{ctx.spell.name}.proofs.json", canonical_json(normalize_proofs_for_diff(proofs)))
+    if vermyth_receipt is not None:
+        ctx.write_text(
+            ctx.artifact_dir / f"{ctx.spell.name}.vermyth_receipt.json",
+            canonical_json(vermyth_receipt),
+        )
 
 
 def execute_spell(
@@ -421,9 +440,15 @@ def execute_spell(
     artifact_dir: Path,
     reviewed_bundle: Optional[Dict[str, Any]] = None,
     enforce_review_bundle: bool = False,
+    *,
+    vermyth_policy_notes: Optional[Sequence[str]] = None,
+    vermyth_gate_record: Optional[Dict[str, Any]] = None,
+    reviewed_bundle_path: Optional[str] = None,
+    vermyth_receipt_emit: bool = False,
 ) -> Dict[str, Any]:
     check_spell_capabilities(spell, capabilities)
     ctx = RuneContext(spell, capabilities, approvals, simulate, artifact_dir, load_json(policy_path))
+    ctx.vermyth_policy_notes = list(vermyth_policy_notes or [])
     ctx.enforce_review_bundle = bool(enforce_review_bundle)
     reviewed_envelope = (((reviewed_bundle or {}).get("capabilities") or {}).get("envelope") or {}).get("kinds")
     if isinstance(reviewed_envelope, list):
@@ -547,8 +572,20 @@ def execute_spell(
         "proofs": build_proof_summary(ctx.proofs),
         "nondeterministic_fields": ["execution_id", "started_at", "ended_at", "proofs.items[].timestamp"],
     }
+    vermyth_receipt: Optional[Dict[str, Any]] = None
+    if vermyth_receipt_emit:
+        from . import vermyth_integration
+
+        vermyth_receipt = vermyth_integration.build_vermyth_receipt_v1(
+            reviewed_bundle_path=reviewed_bundle_path,
+            fingerprints=fingerprints,
+            execution_id=ctx.execution_id,
+            spell_name=spell.name,
+            trace_path=str(ctx.artifact_dir / f"{spell.name}.trace.json"),
+            prov_path=str(ctx.artifact_dir / f"{spell.name}.prov.json"),
+        )
     if spell.witness.get("record", True):
-        export_witnesses(ctx, plan, trace)
+        export_witnesses(ctx, plan, trace, vermyth_receipt=vermyth_receipt)
     final_step_id = plan[-1].step_id if status == "succeeded" else None
     final_meta = ctx.step_meta.get(final_step_id or "", {})
     final_value = ctx.values.get(final_step_id) if final_step_id else None
@@ -580,6 +617,10 @@ def execute_spell(
         "execution_outcome": execution_outcome,
         "blocked": {"reason": block_reason, "source": block_source} if block_reason else None,
     }
+    if vermyth_gate_record is not None:
+        result["vermyth_gate"] = vermyth_gate_record
+    if vermyth_receipt is not None:
+        result["vermyth_receipt_path"] = str(ctx.artifact_dir / f"{spell.name}.vermyth_receipt.json")
     ctx.close()
     return result
 

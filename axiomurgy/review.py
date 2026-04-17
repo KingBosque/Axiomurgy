@@ -2,17 +2,35 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from .legacy import ResolvedRunTarget
 
 from .describe import describe_target, environment_metadata, lint_target
 from .planning import build_plan_summary
 
+
+def _attestation_allowlisted_path(path: str) -> bool:
+    """Optional Vermyth/culture blocks must not break attestation when offline or drifting."""
+    if path.startswith("plan.semantic_recommendations"):
+        return True
+    if path.startswith("plan.vermyth_program_export"):
+        return True
+    if path.startswith("plan.vermyth_program_preview"):
+        return True
+    if path == "vermyth_receipt" or path.startswith("vermyth_receipt."):
+        return True
+    if path.startswith("describe.culture"):
+        return True
+    return False
+
+
 def compare_reviewed_bundle(reviewed: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
     diffs: List[Dict[str, Any]] = []
 
     def diff(path: str, reviewed_value: Any, current_value: Any, severity: str) -> None:
+        if _attestation_allowlisted_path(path):
+            return
         if reviewed_value == current_value:
             return
         diffs.append({"path": path, "reviewed": reviewed_value, "current": current_value, "severity": severity})
@@ -92,11 +110,25 @@ def compute_attestation(reviewed_bundle: Dict[str, Any], resolved: ResolvedRunTa
     return {"status": status, "diffs": cmp["diffs"]}
 
 
-def build_review_bundle(resolved: ResolvedRunTarget, approvals: Optional[Set[str]] = None) -> Dict[str, Any]:
+def build_review_bundle(
+    resolved: ResolvedRunTarget,
+    approvals: Optional[Set[str]] = None,
+    *,
+    vermyth_program: bool = False,
+    vermyth_validate: bool = False,
+    vermyth_recommendations: bool = False,
+) -> Dict[str, Any]:
     approvals = approvals or set()
     describe = describe_target(resolved)
     lint = lint_target(resolved.spellbook.source_path.parent if resolved.spellbook is not None else resolved.spell.source_path)
-    plan = build_plan_summary(resolved, approvals=approvals, simulate=False)
+    plan = build_plan_summary(
+        resolved,
+        approvals=approvals,
+        simulate=False,
+        vermyth_program=vermyth_program,
+        vermyth_validate=vermyth_validate,
+        vermyth_recommendations=vermyth_recommendations,
+    )
     capabilities = plan.get("capabilities") or describe.get("capabilities") or {}
     return {
         "bundle_version": "0.9",

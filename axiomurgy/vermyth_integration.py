@@ -1,0 +1,235 @@
+"""Optional Vermyth enrichment (recommendations, compile preview, gate, receipts) — additive only."""
+
+from __future__ import annotations
+
+import hashlib
+import os
+from typing import Any, Dict, List, Optional
+
+import requests
+
+from .adapters.vermyth_http import VermythHttpClient, VermythHttpError
+from .legacy import PolicyDecision, ResolvedRunTarget, Spell, SpellValidationError
+from .planning import compile_plan
+from .vermyth_export import build_semantic_program, build_vermyth_program_export
+
+
+def _env_base_url() -> Optional[str]:
+    v = os.environ.get("AXIOMURGY_VERMYTH_BASE_URL") or os.environ.get("VERMYTH_BASE_URL")
+    return v.strip() if isinstance(v, str) and v.strip() else None
+
+
+def _timeout_s() -> float:
+    raw = os.environ.get("AXIOMURGY_VERMYTH_TIMEOUT_MS", "5000")
+    try:
+        return max(0.1, float(raw) / 1000.0)
+    except ValueError:
+        return 5.0
+
+
+def _client() -> Optional[VermythHttpClient]:
+    base = _env_base_url()
+    if not base:
+        return None
+    return VermythHttpClient(base, timeout_s=_timeout_s())
+
+
+def _hash_hint(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def fetch_semantic_recommendations(resolved: ResolvedRunTarget, *, skill_id: str = "axiomurgy.plan") -> Dict[str, Any]:
+    """Advisory-only bundle recommendations; never affects planning."""
+    spell = resolved.spell
+    summary_bits = [
+        spell.name,
+        str(spell.intent or ""),
+        str(spell.constraints.get("risk", "low")),
+    ]
+    input_text = "\n".join(summary_bits)[:8000]
+    client = _client()
+    if client is None:
+        return {
+            "status": "unavailable",
+            "source": "vermyth",
+            "reason": "AXIOMURGY_VERMYTH_BASE_URL not set",
+            "input_sha256": _hash_hint(input_text),
+            "items": [],
+        }
+    try:
+        raw, latency_ms = VermythHttpClient.timed_call(
+            lambda: client.arcane_recommend(skill_id=skill_id, input_=input_text)
+        )
+        return {
+            "status": "ok",
+            "source": "vermyth",
+            "latency_ms": round(latency_ms, 3),
+            "input_sha256": _hash_hint(input_text),
+            "raw": raw,
+            "items": raw.get("recommendations") if isinstance(raw.get("recommendations"), list) else [],
+        }
+    except (VermythHttpError, requests.RequestException, OSError, ValueError) as exc:
+        return {
+            "status": "error",
+            "source": "vermyth",
+            "reason": str(exc),
+            "input_sha256": _hash_hint(input_text),
+            "items": [],
+        }
+
+
+def compile_program_preview(program: Dict[str, Any]) -> Dict[str, Any]:
+    client = _client()
+    if client is None:
+        return {"status": "unavailable", "reason": "AXIOMURGY_VERMYTH_BASE_URL not set"}
+    try:
+        raw, latency_ms = VermythHttpClient.timed_call(lambda: client.compile_program(program))
+        return {
+            "status": "ok",
+            "latency_ms": round(latency_ms, 3),
+            "result": raw,
+            "validation": raw.get("validation"),
+        }
+    except (VermythHttpError, requests.RequestException, OSError, ValueError) as exc:
+        return {"status": "error", "reason": str(exc)}
+
+
+def enrich_plan_output(
+    out: Dict[str, Any],
+    resolved: ResolvedRunTarget,
+    *,
+    vermyth_program: bool = False,
+    vermyth_validate: bool = False,
+    vermyth_recommendations: bool = False,
+) -> None:
+    """Mutate plan summary dict in place with additive keys only."""
+    program: Optional[Dict[str, Any]] = None
+    if vermyth_program:
+        exp = build_vermyth_program_export(resolved.spell)
+        out["vermyth_program_export"] = exp
+        program = exp["program"]
+    elif vermyth_validate:
+        program = build_semantic_program(resolved.spell)
+    if vermyth_validate and program is not None:
+        out["vermyth_program_preview"] = compile_program_preview(program)
+    if vermyth_recommendations:
+        out["semantic_recommendations"] = fetch_semantic_recommendations(resolved)
+
+
+def _gate_config(policy: Dict[str, Any]) -> Dict[str, Any]:
+    block = policy.get("vermyth_gate")
+    if not isinstance(block, dict):
+        return {
+            "enabled": False,
+            "mode": "advisory",
+            "timeout_ms": 2000,
+            "on_timeout": "allow",
+            "on_incoherent": "allow",
+        }
+    return {
+        "enabled": bool(block.get("enabled", False)),
+        "mode": str(block.get("mode", "advisory")),
+        "timeout_ms": int(block.get("timeout_ms", 2000)),
+        "on_timeout": str(block.get("on_timeout", "allow")),
+        "on_incoherent": str(block.get("on_incoherent", "allow")),
+    }
+
+
+def _decide_payload(spell: Spell) -> Dict[str, Any]:
+    plan = compile_plan(spell)
+    aspects = ["MOTION", "FORM", "VOID"]
+    return {
+        "intent": {
+            "objective": (spell.intent or spell.name)[:500],
+            "scope": f"axiomurgy:{spell.name}"[:200],
+            "reversibility": "PARTIAL",
+            "side_effect_tolerance": "MEDIUM",
+        },
+        "aspects": aspects,
+        "effects": [
+            {
+                "effect_type": "COMPUTE",
+                "target": None,
+                "reversible": True,
+                "cost_hint": float(len(plan)),
+            }
+        ],
+    }
+
+
+def run_vermyth_gate(spell: Spell, policy: Dict[str, Any]) -> Dict[str, Any]:
+    """Preflight semantic gate; returns annotation record; may signal hard-stop via raise."""
+    cfg = _gate_config(policy)
+    if not cfg["enabled"]:
+        return {"status": "skipped", "reason": "disabled"}
+    payload = _decide_payload(spell)
+    timeout_s = max(0.1, float(cfg["timeout_ms"]) / 1000.0)
+    base = _env_base_url()
+    if not base:
+        if cfg["on_timeout"] == "deny":
+            raise SpellValidationError("vermyth_gate: AXIOMURGY_VERMYTH_BASE_URL not set and on_timeout=deny")
+        return {"status": "unavailable", "reason": "AXIOMURGY_VERMYTH_BASE_URL not set", "mode": cfg["mode"]}
+    client = VermythHttpClient(base, timeout_s=timeout_s)
+    try:
+        raw, latency_ms = VermythHttpClient.timed_call(lambda: client.decide(payload))
+    except (VermythHttpError, requests.RequestException, OSError, ValueError) as exc:
+        if cfg["on_timeout"] == "deny":
+            raise SpellValidationError(f"vermyth_gate: {exc}") from exc
+        return {"status": "error", "reason": str(exc), "mode": cfg["mode"]}
+
+    decision = raw.get("decision") if isinstance(raw.get("decision"), dict) else {}
+    action = str(decision.get("action") or "ALLOW").upper()
+    gate_record: Dict[str, Any] = {
+        "status": "ok",
+        "mode": cfg["mode"],
+        "latency_ms": round(latency_ms, 3),
+        "action": action,
+        "rationale": decision.get("rationale"),
+        "raw": raw,
+    }
+    if cfg["mode"] == "hard_stop" and action == "DENY" and cfg["on_incoherent"] == "deny":
+        raise SpellValidationError(f"vermyth_gate hard_stop: action={action}")
+    return gate_record
+
+
+def vermyth_gate_policy_notes(record: Dict[str, Any]) -> List[str]:
+    if record.get("status") not in ("ok",):
+        return []
+    if str(record.get("mode")) != "policy_input":
+        return []
+    action = str(record.get("action") or "")
+    r = record.get("rationale")
+    return [f"vermyth_gate:{action}:{r}"] if r else [f"vermyth_gate:{action}"]
+
+
+def build_vermyth_receipt_v1(
+    *,
+    reviewed_bundle_path: Optional[str],
+    fingerprints: Dict[str, Any],
+    execution_id: str,
+    spell_name: str,
+    trace_path: Optional[str],
+    prov_path: Optional[str],
+) -> Dict[str, Any]:
+    """Unsigned cross-system receipt mapping (Vermyth-friendly lineage stub)."""
+    req: Dict[str, Any] = {
+        "vermyth_receipt_version": "1.0.0",
+        "kind": "axiomurgy.execution",
+        "spell": spell_name,
+        "execution_id": execution_id,
+        "reviewed_bundle_path": reviewed_bundle_path,
+        "fingerprints": fingerprints,
+        "artifacts": {
+            "trace_path": trace_path,
+            "prov_path": prov_path,
+        },
+    }
+    return req
+
+
+def should_emit_receipt() -> bool:
+    return os.environ.get("AXIOMURGY_VERMYTH_RECEIPT", "").strip() in ("1", "true", "yes")
+
+
+def culture_enabled() -> bool:
+    return os.environ.get("AXIOMURGY_CULTURE", "").strip() in ("1", "true", "yes")

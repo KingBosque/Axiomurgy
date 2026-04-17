@@ -20,5 +20,12 @@
       "rune": ["gate.shell"],
       "reason": "Shell execution is not part of the reference runtime."
     }
-  ]
+  ],
+  "vermyth_gate": {
+    "enabled": false,
+    "mode": "advisory",
+    "timeout_ms": 2000,
+    "on_timeout": "allow",
+    "on_incoherent": "allow"
+  }
 }
