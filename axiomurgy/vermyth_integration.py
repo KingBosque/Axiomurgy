@@ -12,7 +12,7 @@ import requests
 from .adapters.vermyth_http import VermythHttpClient, VermythHttpError
 from .legacy import PolicyDecision, ResolvedRunTarget, Spell, SpellValidationError
 from .planning import compile_plan
-from .vermyth_export import build_semantic_program, build_vermyth_program_export
+from .vermyth_export import build_semantic_program, build_vermyth_program_export, spell_level_vermyth_intent
 
 
 def _env_base_url() -> Optional[str]:
@@ -47,19 +47,11 @@ def _recommend_input_payload(spell: Spell) -> tuple[str, Dict[str, Any]]:
         str(spell.constraints.get("risk", "low")),
     ]
     input_text = "\n".join(summary_bits)[:8000]
-    objective = input_text[:500]
-    payload: Dict[str, Any] = {
-        "intent": {
-            "objective": objective,
-            "scope": f"axiomurgy:{spell.name}"[:200],
-            "reversibility": "PARTIAL",
-            "side_effect_tolerance": "MEDIUM",
-        },
-    }
+    payload: Dict[str, Any] = {"intent": spell_level_vermyth_intent(spell)}
     return input_text, payload
 
 
-def fetch_semantic_recommendations(resolved: ResolvedRunTarget, *, skill_id: str = "axiomurgy.plan") -> Dict[str, Any]:
+def fetch_semantic_recommendations(resolved: ResolvedRunTarget, *, skill_id: str = "decide") -> Dict[str, Any]:
     """Advisory-only bundle recommendations; never affects planning."""
     spell = resolved.spell
     input_text, input_payload = _recommend_input_payload(spell)
@@ -206,12 +198,7 @@ def _decide_payload(spell: Spell) -> Dict[str, Any]:
     plan = compile_plan(spell)
     aspects = ["MOTION", "FORM", "VOID"]
     return {
-        "intent": {
-            "objective": (spell.intent or spell.name)[:500],
-            "scope": f"axiomurgy:{spell.name}"[:200],
-            "reversibility": "PARTIAL",
-            "side_effect_tolerance": "MEDIUM",
-        },
+        "intent": spell_level_vermyth_intent(spell),
         "aspects": aspects,
         "effects": [
             {

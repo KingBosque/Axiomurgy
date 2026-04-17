@@ -55,6 +55,38 @@ def _intent_payload(spell: Spell, step: Step) -> Dict[str, Any]:
     }
 
 
+def spell_level_vermyth_intent(spell: Spell) -> Dict[str, str]:
+    """
+    Spell-level intent fields for Vermyth HTTP probes (/arcane/recommend, vermyth_gate).
+
+    Uses the same risk / write-or-not rules as per-step _intent_payload, but a single
+    objective line derived from name + intent + risk (for recommendation matching) and
+    scope ``axiomurgy:{spell.name}``.
+    """
+    risk = str(spell.constraints.get("risk", "low"))
+    tol = "HIGH" if risk in ("high", "critical") else "MEDIUM"
+    plan = compile_plan(spell)
+    has_write = any(s.effect == "write" for s in plan)
+    if has_write:
+        rev = "PARTIAL" if risk in ("low", "medium") else "IRREVERSIBLE"
+    else:
+        rev = "REVERSIBLE"
+    summary_bits = [
+        spell.name,
+        str(spell.intent or ""),
+        str(spell.constraints.get("risk", "low")),
+    ]
+    input_text = "\n".join(summary_bits)[:8000]
+    objective = input_text[:500]
+    scope = f"axiomurgy:{spell.name}"[:200]
+    return {
+        "objective": objective,
+        "scope": scope,
+        "reversibility": rev,
+        "side_effect_tolerance": tol,
+    }
+
+
 def build_semantic_program(spell: Spell, *, plan: Sequence[Step] | None = None) -> Dict[str, Any]:
     """Return a Vermyth-compatible SemanticProgram JSON dict (subset used by compile_program)."""
     ordered = list(plan) if plan is not None else compile_plan(spell)

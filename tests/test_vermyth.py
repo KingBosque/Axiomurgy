@@ -11,7 +11,12 @@ from unittest.mock import MagicMock, patch
 from axiomurgy.legacy import Spell, Step, load_json, load_spell
 from axiomurgy.planning import build_plan_summary, resolve_run_target
 from axiomurgy.review import _attestation_allowlisted_path, compare_reviewed_bundle
-from axiomurgy.vermyth_export import VERMYTH_PROGRAM_EXPORT_VERSION, build_semantic_program, build_vermyth_program_export
+from axiomurgy.vermyth_export import (
+    VERMYTH_PROGRAM_EXPORT_VERSION,
+    build_semantic_program,
+    build_vermyth_program_export,
+    spell_level_vermyth_intent,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -104,6 +109,23 @@ class TestCompareReviewedBundleFingerprint(unittest.TestCase):
         self.assertIn("semantic_recommendations", out)
 
 
+class TestSpellLevelVermythIntent(unittest.TestCase):
+    def test_example_spells_match_bundle_scopes(self) -> None:
+        for rel, expected_scope, expected_tol, expected_rev in (
+            ("examples/inbox_triage.spell.json", "axiomurgy:inbox_triage", "HIGH", "IRREVERSIBLE"),
+            ("examples/openapi_ticket_then_fail.spell.json", "axiomurgy:openapi_ticket_then_fail_v0_6", "HIGH", "IRREVERSIBLE"),
+            ("examples/research_brief.spell.json", "axiomurgy:research_brief", "MEDIUM", "PARTIAL"),
+        ):
+            p = ROOT / rel
+            if not p.is_file():
+                self.skipTest(f"missing {rel}")
+            spell = load_spell(p)
+            intent = spell_level_vermyth_intent(spell)
+            self.assertEqual(intent["scope"], expected_scope)
+            self.assertEqual(intent["side_effect_tolerance"], expected_tol)
+            self.assertEqual(intent["reversibility"], expected_rev)
+
+
 class TestFetchSemanticRecommendationsContract(unittest.TestCase):
     """Ensures /arcane/recommend receives task-shaped dict input (Vermyth HTTP contract)."""
 
@@ -113,14 +135,14 @@ class TestFetchSemanticRecommendationsContract(unittest.TestCase):
         from axiomurgy.vermyth_integration import fetch_semantic_recommendations
 
         mock_instance = MagicMock()
-        mock_instance.arcane_recommend.return_value = {"recommendations": [], "skill_id": "axiomurgy.plan"}
+        mock_instance.arcane_recommend.return_value = {"recommendations": [], "skill_id": "decide"}
         mock_client.return_value = mock_instance
         spell_path = ROOT / "examples" / "inbox_triage.spell.json"
         if not spell_path.is_file():
             self.skipTest("example spell missing")
         policy_path = ROOT / "axiomurgy" / "bundled" / "policies" / "default.policy.json"
         resolved = resolve_run_target(spell_path, None, policy_path, ROOT / "artifacts")
-        out = fetch_semantic_recommendations(resolved, skill_id="axiomurgy.plan")
+        out = fetch_semantic_recommendations(resolved, skill_id="decide")
         self.assertEqual(out["status"], "ok")
         mock_instance.arcane_recommend.assert_called_once()
         inp = mock_instance.arcane_recommend.call_args.kwargs["input_"]
