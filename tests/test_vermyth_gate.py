@@ -8,9 +8,17 @@ from unittest.mock import patch
 
 import tempfile
 
+import requests
+
+from axiomurgy.adapters.vermyth_http import VermythHttpError
 from axiomurgy.execution import evaluate_policy, RuneContext
 from axiomurgy.legacy import Spell, SpellValidationError, Step, load_json
-from axiomurgy.vermyth_integration import run_vermyth_gate, vermyth_gate_policy_notes
+from axiomurgy.vermyth_integration import (
+    VermythGateTransportFailureKind,
+    _classify_gate_transport_failure,
+    run_vermyth_gate,
+    vermyth_gate_policy_notes,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -131,6 +139,33 @@ class TestVermythGateModes(unittest.TestCase):
         self.assertEqual(len([x for x in d1.reasons if "vermyth_gate" in x]), 1)
         vg_count = sum(1 for x in d2.reasons if "vermyth_gate" in x)
         self.assertEqual(vg_count, 0)
+
+
+class TestGateTransportClassification(unittest.TestCase):
+    def test_classify_transport_failures(self) -> None:
+        self.assertEqual(
+            _classify_gate_transport_failure(VermythHttpError("HTTP 500")),
+            VermythGateTransportFailureKind.HTTP_ADAPTER,
+        )
+        self.assertEqual(
+            _classify_gate_transport_failure(requests.Timeout("t")),
+            VermythGateTransportFailureKind.REQUESTS_TIMEOUT,
+        )
+        self.assertEqual(
+            _classify_gate_transport_failure(requests.ConnectionError("c")),
+            VermythGateTransportFailureKind.REQUESTS_CONNECTION,
+        )
+        self.assertEqual(
+            _classify_gate_transport_failure(requests.HTTPError()),
+            VermythGateTransportFailureKind.REQUESTS_HTTP,
+        )
+        self.assertEqual(
+            _classify_gate_transport_failure(requests.RequestException("x")),
+            VermythGateTransportFailureKind.REQUESTS_OTHER,
+        )
+        self.assertEqual(_classify_gate_transport_failure(OSError(9, "bad")), VermythGateTransportFailureKind.OS_ERROR)
+        self.assertEqual(_classify_gate_transport_failure(ValueError("v")), VermythGateTransportFailureKind.VALUE_ERROR)
+        self.assertEqual(_classify_gate_transport_failure(RuntimeError("r")), VermythGateTransportFailureKind.OTHER)
 
 
 class TestVermythGateTransport(unittest.TestCase):

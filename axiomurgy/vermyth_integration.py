@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -116,6 +117,57 @@ def enrich_plan_output(
         out["semantic_recommendations"] = fetch_semantic_recommendations(resolved)
 
 
+class VermythGateTransportFailureKind(str, Enum):
+    """Internal classification of HTTP/transport failures in run_vermyth_gate (not serialized)."""
+
+    HTTP_ADAPTER = "http_adapter"  # VermythHttpError (4xx/5xx, bad JSON shape from adapter)
+    REQUESTS_TIMEOUT = "requests_timeout"
+    REQUESTS_CONNECTION = "requests_connection"
+    REQUESTS_HTTP = "requests_http"  # requests.HTTPError (rare here; adapter usually wraps)
+    REQUESTS_OTHER = "requests_other"
+    OS_ERROR = "os_error"
+    VALUE_ERROR = "value_error"
+    OTHER = "other"
+
+
+def _classify_gate_transport_failure(exc: BaseException) -> VermythGateTransportFailureKind:
+    """Map an exception from decide() to a stable internal class (not exposed on gate records)."""
+    if isinstance(exc, VermythHttpError):
+        return VermythGateTransportFailureKind.HTTP_ADAPTER
+    if isinstance(exc, requests.Timeout):
+        return VermythGateTransportFailureKind.REQUESTS_TIMEOUT
+    if isinstance(exc, requests.ConnectionError):
+        return VermythGateTransportFailureKind.REQUESTS_CONNECTION
+    if isinstance(exc, requests.HTTPError):
+        return VermythGateTransportFailureKind.REQUESTS_HTTP
+    if isinstance(exc, requests.RequestException):
+        return VermythGateTransportFailureKind.REQUESTS_OTHER
+    if isinstance(exc, OSError):
+        return VermythGateTransportFailureKind.OS_ERROR
+    if isinstance(exc, ValueError):
+        return VermythGateTransportFailureKind.VALUE_ERROR
+    return VermythGateTransportFailureKind.OTHER
+
+
+def _gate_missing_base_url_record(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    return {"status": "unavailable", "reason": "AXIOMURGY_VERMYTH_BASE_URL not set", "mode": cfg["mode"]}
+
+
+def _resolve_missing_base_url(cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Return a soft gate record when base URL is unset, or None when on_timeout deny requires raise."""
+    if cfg["on_timeout"] == "deny":
+        return None
+    return _gate_missing_base_url_record(cfg)
+
+
+def _soft_transport_failure_record(
+    cfg: Dict[str, Any], exc: BaseException, kind: VermythGateTransportFailureKind
+) -> Dict[str, Any]:
+    """Gate record for transport failure when execution continues (on_timeout allow)."""
+    _ = kind  # internal class; JSON shape is unchanged across kinds
+    return {"status": "error", "reason": str(exc), "mode": cfg["mode"]}
+
+
 def _gate_config(policy: Dict[str, Any]) -> Dict[str, Any]:
     block = policy.get("vermyth_gate")
     if not isinstance(block, dict):
@@ -166,16 +218,18 @@ def run_vermyth_gate(spell: Spell, policy: Dict[str, Any]) -> Dict[str, Any]:
     timeout_s = max(0.1, float(cfg["timeout_ms"]) / 1000.0)
     base = _env_base_url()
     if not base:
-        if cfg["on_timeout"] == "deny":
+        soft = _resolve_missing_base_url(cfg)
+        if soft is None:
             raise SpellValidationError("vermyth_gate: AXIOMURGY_VERMYTH_BASE_URL not set and on_timeout=deny")
-        return {"status": "unavailable", "reason": "AXIOMURGY_VERMYTH_BASE_URL not set", "mode": cfg["mode"]}
+        return soft
     client = VermythHttpClient(base, timeout_s=timeout_s)
     try:
         raw, latency_ms = VermythHttpClient.timed_call(lambda: client.decide(payload))
     except (VermythHttpError, requests.RequestException, OSError, ValueError) as exc:
+        transport_kind = _classify_gate_transport_failure(exc)
         if cfg["on_timeout"] == "deny":
             raise SpellValidationError(f"vermyth_gate: {exc}") from exc
-        return {"status": "error", "reason": str(exc), "mode": cfg["mode"]}
+        return _soft_transport_failure_record(cfg, exc, transport_kind)
 
     decision = raw.get("decision") if isinstance(raw.get("decision"), dict) else {}
     action = str(decision.get("action") or "ALLOW").upper()

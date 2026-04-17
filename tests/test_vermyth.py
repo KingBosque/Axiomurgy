@@ -38,6 +38,12 @@ class TestVermythExport(unittest.TestCase):
         self.assertFalse(_attestation_allowlisted_path("plan.steps"))
         self.assertFalse(_attestation_allowlisted_path("capabilities.vermyth"))
 
+    def test_allowlist_prefix_does_not_swallow_adjacent_sibling_field(self) -> None:
+        """A future `plan.semantic_recommendation` (singular) key must not match the longer prefix."""
+        self.assertTrue(_attestation_allowlisted_path("plan.semantic_recommendations"))
+        self.assertFalse(_attestation_allowlisted_path("plan.semantic_recommendation"))
+        self.assertFalse(_attestation_allowlisted_path("plan.semantic_recommendation.items"))
+
     def test_simulated_diff_skips_allowlisted_paths_only(self) -> None:
         def simulated_diff(path: str, reviewed_v: object, current_v: object) -> str | None:
             if _attestation_allowlisted_path(path):
