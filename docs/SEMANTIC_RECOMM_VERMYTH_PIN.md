@@ -1,6 +1,6 @@
 # Vermyth pin and version-pair policy (semantic recommendations)
 
-Semantic `/arcane/recommend` behavior is **advisory-only** and validated against a **committed HTTP baseline** ([`docs/reports/compatibility_baseline_live_v1.json`](reports/compatibility_baseline_live_v1.json)). This document is the single place for **which Vermyth git ref** CI uses and how to **refresh** the baseline safely.
+Semantic `/arcane/recommend` behavior is **advisory-only** and validated against a **committed HTTP baseline** ([`docs/reports/compatibility_baseline_live_v1.json`](reports/compatibility_baseline_live_v1.json)). This document is the single place for **which Vermyth git ref** CI uses and how to **refresh** the baseline safely. Short operator checklist: [`SEMANTIC_BASELINE_MAINTAINER_RUNBOOK.md`](SEMANTIC_BASELINE_MAINTAINER_RUNBOOK.md).
 
 ## Supported pair
 
