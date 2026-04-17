@@ -29,7 +29,7 @@ jobs:
         run: python -m pip install -e ".[dev]"
 
       - name: Pytest
-        run: python -m pytest -q
+        run: python -m pytest -q -m "not vermyth_live"
 
       - name: Smoke (Python)
         run: python scripts/smoke.py
@@ -37,6 +37,23 @@ jobs:
       - name: Smoke (bash)
         if: runner.os != 'Windows'
         run: bash scripts/smoke.sh
+
+  # Optional: enable when a pinned Vermyth HTTP server or image is available in CI.
+  vermyth_live:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Live Vermyth integration
+        env:
+          AXIOMURGY_VERMYTH_LIVE: "1"
+          AXIOMURGY_VERMYTH_BASE_URL: ${{ secrets.VERMYTH_HTTP_URL }}
+        run: python -m pytest -q tests/integration/test_vermyth_live.py -m vermyth_live
 
   install_smoke:
     runs-on: ubuntu-latest

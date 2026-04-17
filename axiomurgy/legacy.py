@@ -3354,7 +3354,7 @@ def main(argv: Sequence[str]) -> int:
                 if args.replay_artifact_dir:
                     rar = Path(args.replay_artifact_dir).resolve()
                 else:
-                    digest = sha256_bytes(str(revolution_dir.resolve()).encode("utf-8")).hex()[:16]
+                    digest = sha256_bytes(str(revolution_dir.resolve()).encode("utf-8"))[:16]
                     rar = Path(tempfile.gettempdir()) / f"axiomurgy_replay_{digest}"
                 rar.mkdir(parents=True, exist_ok=True)
                 result = replay_ouroboros_revolution(

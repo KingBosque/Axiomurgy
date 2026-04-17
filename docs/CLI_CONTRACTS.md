@@ -53,11 +53,35 @@ Targets and `--policy` / `--artifact-dir` paths are resolved by the runtime; tes
 
 ## Optional Vermyth integration (additive)
 
+Full gate semantics, attestation notes, and replay/Ouroboros divergence are documented in [VERMYTH_GATE.md](VERMYTH_GATE.md).
+
 - **Environment**: `AXIOMURGY_VERMYTH_BASE_URL` (or `VERMYTH_BASE_URL`) — Vermyth HTTP adapter base (e.g. `http://127.0.0.1:7777/`). `AXIOMURGY_VERMYTH_TIMEOUT_MS` overrides HTTP client timeout (default 5000).
 - **`--export-vermyth-program PATH`**: writes a standalone `vermyth_program_export` JSON document and exits (no `--plan` / `--describe` / `--lint` / `--review-bundle`).
 - **`--vermyth-program`**: with `--plan` or `--review-bundle`, adds `vermyth_program_export` to the plan JSON.
 - **`--vermyth-validate`**: adds `vermyth_program_preview` (Vermyth `compile_program` response slice) when a base URL is set.
 - **`--vermyth-recommendations`**: adds `semantic_recommendations` (advisory; may be `unavailable` without a server).
 - **`--vermyth-receipt`**: with execution + witness recording, also writes `*.vermyth_receipt.json` (unsigned cross-reference). Alternatively `AXIOMURGY_VERMYTH_RECEIPT=1`.
-- **Policy** `vermyth_gate` (see bundled default policy): optional pre-execution `decide` call; modes `advisory`, `policy_input`, `hard_stop` (with `on_incoherent` / `on_timeout`).
+- **Policy** `vermyth_gate`: see [VERMYTH_GATE.md](VERMYTH_GATE.md).
 - **Culture memory**: `AXIOMURGY_CULTURE=1` adds an optional `culture` block to `--describe` when `AXIOMURGY_CULTURE_DB` points at a SQLite catalog (or default temp path).
+
+### Vermyth vs replay vs Ouroboros (routing)
+
+```mermaid
+flowchart TD
+  mainEntry[main after resolve_run_target]
+  mainEntry --> replayBranch{replay flags}
+  replayBranch -->|yes| replayFn[replay_ouroboros_revolution]
+  replayBranch -->|no| otherModes{describe plan lint verify review-bundle}
+  otherModes -->|yes| noGate[no vermyth_gate]
+  otherModes -->|no| execBranch[execution branch]
+  execBranch --> gate[run_vermyth_gate]
+  gate --> cycleCheck{cycle_config}
+  cycleCheck -->|yes| ouroboros[ouroboros_chamber]
+  cycleCheck -->|no| executeSpell[execute_spell]
+```
+
+Replay does not call the gate. Ouroboros calls the gate before the chamber, but the cycle JSON does not include `vermyth_gate` from that path (see [VERMYTH_GATE.md](VERMYTH_GATE.md)).
+
+### Baseline without Vermyth flags
+
+With no `AXIOMURGY_VERMYTH_*` / `VERMYTH_BASE_URL` / Vermyth CLI flags / culture env, `--describe` and `--plan` outputs do not include `vermyth_program_export`, `vermyth_program_preview`, `semantic_recommendations`, or `culture`. Execution JSON does not include `vermyth_gate` unless the policy gate is enabled and HTTP succeeds (or returns a record). Tests enforce this in `tests/test_vermyth_cli.py`.

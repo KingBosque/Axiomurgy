@@ -1,0 +1,4 @@
+# Optional: install a pinned Vermyth (PyPI or VCS) when running live integration tests.
+# See tests/integration/test_vermyth_live.py and docs/VERMYTH_GATE.md.
+# Example (adjust version to the tag you validated):
+# vermyth==0.0.0

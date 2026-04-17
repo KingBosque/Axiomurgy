@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from axiomurgy.legacy import Spell, Step, load_json, load_spell
 from axiomurgy.planning import build_plan_summary, resolve_run_target
-from axiomurgy.review import _attestation_allowlisted_path
+from axiomurgy.review import _attestation_allowlisted_path, compare_reviewed_bundle
 from axiomurgy.vermyth_export import VERMYTH_PROGRAM_EXPORT_VERSION, build_semantic_program, build_vermyth_program_export
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +30,51 @@ class TestVermythExport(unittest.TestCase):
         self.assertTrue(_attestation_allowlisted_path("plan.semantic_recommendations"))
         self.assertTrue(_attestation_allowlisted_path("plan.vermyth_program_export.version"))
         self.assertTrue(_attestation_allowlisted_path("describe.culture.records"))
+
+    def test_allowlist_prefix_and_non_matching_paths(self) -> None:
+        # Prefix policy: anything under plan.semantic_recommendations* is skipped (see VERMYTH_GATE.md).
+        self.assertTrue(_attestation_allowlisted_path("plan.semantic_recommendations_extra"))
+        self.assertFalse(_attestation_allowlisted_path("describe.semantic_recommendations"))
+        self.assertFalse(_attestation_allowlisted_path("plan.steps"))
+        self.assertFalse(_attestation_allowlisted_path("capabilities.vermyth"))
+
+    def test_simulated_diff_skips_allowlisted_paths_only(self) -> None:
+        def simulated_diff(path: str, reviewed_v: object, current_v: object) -> str | None:
+            if _attestation_allowlisted_path(path):
+                return None
+            if reviewed_v == current_v:
+                return None
+            return path
+
+        self.assertIsNone(simulated_diff("plan.semantic_recommendations", {"x": 1}, {"x": 2}))
+        self.assertEqual(
+            simulated_diff("fingerprints.required.spell", "aaa", "bbb"),
+            "fingerprints.required.spell",
+        )
+
+
+class TestCompareReviewedBundleFingerprint(unittest.TestCase):
+    def _base_bundle(self, *, spell_fp: str) -> dict:
+        return {
+            "bundle_version": "0.9",
+            "environment": {
+                "axiomurgy_version": "x",
+                "mcp_protocol_version": "y",
+                "witness_canonical_json": True,
+                "python": {"implementation": "cpython", "major_minor": "3.11", "version": "3.11.0"},
+                "platform": {"platform": "linux"},
+            },
+            "fingerprints": {"required": {"spell": spell_fp}},
+            "capabilities": {"envelope": {"kinds": ["read"]}},
+        }
+
+    def test_fingerprint_mismatch_is_required(self) -> None:
+        reviewed = self._base_bundle(spell_fp="aaa")
+        current = self._base_bundle(spell_fp="bbb")
+        cmp = compare_reviewed_bundle(reviewed, current)
+        self.assertEqual(cmp["status"], "mismatch")
+        paths = [d["path"] for d in cmp["diffs"]]
+        self.assertIn("fingerprints.required.spell", paths)
 
     @patch("axiomurgy.vermyth_integration.fetch_semantic_recommendations")
     @patch("axiomurgy.vermyth_integration.compile_program_preview")
