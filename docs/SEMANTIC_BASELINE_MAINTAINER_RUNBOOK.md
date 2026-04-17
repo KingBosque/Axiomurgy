@@ -8,5 +8,5 @@
 6. **Pin ownership**: **Axiomurgy repo maintainers** bump `VERMYTH_GIT_REF` (and baseline `vermyth_git`) in lockstep with whoever deploys the Vermyth HTTP stack that serves those bundles; record coordination in the baseline refresh PR.
 7. **Policy detail** (SHA drift, refresh steps): [`SEMANTIC_RECOMM_VERMYTH_PIN.md`](SEMANTIC_RECOMM_VERMYTH_PIN.md).
 8. **Quick status** without a full probe: `python scripts/semantic_seam_status.py` (add `--probe` if base URL is set for `/healthz` only).
-9. **Tag** `semantic-seam-baseline-gate-r1` marks the repo state that introduced the gate + this runbook; future gate milestones may add `…-r2`, etc.
+9. **Git tag** `semantic-seam-baseline-gate-r1` points at the commit that adds this runbook alongside the CI gate; use `…-r2` for later milestones if needed.
 10. **Forks**: the workflow skips when `VERMYTH_HTTP_URL` is unset—expected; only the canonical repo with secrets gets the automated gate.
