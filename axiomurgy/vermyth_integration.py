@@ -39,15 +39,30 @@ def _hash_hint(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
-def fetch_semantic_recommendations(resolved: ResolvedRunTarget, *, skill_id: str = "axiomurgy.plan") -> Dict[str, Any]:
-    """Advisory-only bundle recommendations; never affects planning."""
-    spell = resolved.spell
+def _recommend_input_payload(spell: Spell) -> tuple[str, Dict[str, Any]]:
+    """Plain-text fingerprint line and task-shaped Vermyth `input` dict for /arcane/recommend."""
     summary_bits = [
         spell.name,
         str(spell.intent or ""),
         str(spell.constraints.get("risk", "low")),
     ]
     input_text = "\n".join(summary_bits)[:8000]
+    objective = input_text[:500]
+    payload: Dict[str, Any] = {
+        "intent": {
+            "objective": objective,
+            "scope": f"axiomurgy:{spell.name}"[:200],
+            "reversibility": "PARTIAL",
+            "side_effect_tolerance": "MEDIUM",
+        },
+    }
+    return input_text, payload
+
+
+def fetch_semantic_recommendations(resolved: ResolvedRunTarget, *, skill_id: str = "axiomurgy.plan") -> Dict[str, Any]:
+    """Advisory-only bundle recommendations; never affects planning."""
+    spell = resolved.spell
+    input_text, input_payload = _recommend_input_payload(spell)
     client = _client()
     if client is None:
         return {
@@ -59,7 +74,7 @@ def fetch_semantic_recommendations(resolved: ResolvedRunTarget, *, skill_id: str
         }
     try:
         raw, latency_ms = VermythHttpClient.timed_call(
-            lambda: client.arcane_recommend(skill_id=skill_id, input_=input_text)
+            lambda: client.arcane_recommend(skill_id=skill_id, input_=input_payload)
         )
         return {
             "status": "ok",

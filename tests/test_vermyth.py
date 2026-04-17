@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from axiomurgy.legacy import Spell, Step, load_json, load_spell
 from axiomurgy.planning import build_plan_summary, resolve_run_target
@@ -101,6 +102,32 @@ class TestCompareReviewedBundleFingerprint(unittest.TestCase):
         )
         self.assertEqual(out["vermyth_program_export"]["vermyth_program_export_version"], VERMYTH_PROGRAM_EXPORT_VERSION)
         self.assertIn("semantic_recommendations", out)
+
+
+class TestFetchSemanticRecommendationsContract(unittest.TestCase):
+    """Ensures /arcane/recommend receives task-shaped dict input (Vermyth HTTP contract)."""
+
+    @patch.dict(os.environ, {"AXIOMURGY_VERMYTH_BASE_URL": "http://127.0.0.1:9"}, clear=False)
+    @patch("axiomurgy.vermyth_integration._client")
+    def test_arcane_recommend_receives_dict_input(self, mock_client: MagicMock) -> None:
+        from axiomurgy.vermyth_integration import fetch_semantic_recommendations
+
+        mock_instance = MagicMock()
+        mock_instance.arcane_recommend.return_value = {"recommendations": [], "skill_id": "axiomurgy.plan"}
+        mock_client.return_value = mock_instance
+        spell_path = ROOT / "examples" / "inbox_triage.spell.json"
+        if not spell_path.is_file():
+            self.skipTest("example spell missing")
+        policy_path = ROOT / "axiomurgy" / "bundled" / "policies" / "default.policy.json"
+        resolved = resolve_run_target(spell_path, None, policy_path, ROOT / "artifacts")
+        out = fetch_semantic_recommendations(resolved, skill_id="axiomurgy.plan")
+        self.assertEqual(out["status"], "ok")
+        mock_instance.arcane_recommend.assert_called_once()
+        inp = mock_instance.arcane_recommend.call_args.kwargs["input_"]
+        self.assertIsInstance(inp, dict)
+        self.assertIn("intent", inp)
+        self.assertIsInstance(inp["intent"], dict)
+        self.assertIn("objective", inp["intent"])
 
 
 class TestVermythGateConfig(unittest.TestCase):

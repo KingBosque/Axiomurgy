@@ -62,7 +62,17 @@ def test_tools_list_or_health(client: VermythHttpClient) -> None:
 
 
 def test_arcane_recommend(client: VermythHttpClient) -> None:
-    out = client.arcane_recommend(skill_id="axiomurgy.test", input_="intent test\nrisk low")
+    out = client.arcane_recommend(
+        skill_id="axiomurgy.test",
+        input_={
+            "intent": {
+                "objective": "intent test risk low",
+                "scope": "axiomurgy:live_test",
+                "reversibility": "PARTIAL",
+                "side_effect_tolerance": "MEDIUM",
+            },
+        },
+    )
     assert isinstance(out, dict)
 
 
