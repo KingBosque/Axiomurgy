@@ -1,0 +1,12 @@
+{
+  "spell_path": "examples/openapi_ticket_then_fail.spell.json",
+  "input_text": "openapi_ticket_then_fail_v0_6\nCreate a local issue through OpenAPI and then fail intentionally to exercise rollback semantics.\nhigh",
+  "input": {
+    "intent": {
+      "objective": "openapi_ticket_then_fail_v0_6\nCreate a local issue through OpenAPI and then fail intentionally to exercise rollback semantics.\nhigh",
+      "scope": "axiomurgy:openapi_ticket_then_fail_v0_6",
+      "reversibility": "IRREVERSIBLE",
+      "side_effect_tolerance": "HIGH"
+    }
+  }
+}

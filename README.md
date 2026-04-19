@@ -61,6 +61,7 @@ This relay upgrades the runtime from **capability-sealed execution** to **enforc
 - `scripts/smoke.py` - end-to-end verification (cross-platform)
 - `scripts/smoke.sh` - legacy bash smoke
 - `tests/test_runtime.py` - regression checks
+- `packages/` - optional TypeScript workspace (JSON Schema checks, Vermyth HTTP shim, semantic-seam CLIs); Python remains the reference runtime
 - `AGENTS.md`, `CURSOR_PROMPTS.md`, and `.cursor/rules/` - Cursor handoff
 
 ## Install
@@ -75,6 +76,13 @@ Runtime dependencies only:
 
 ```bash
 python -m pip install -r requirements.txt
+```
+
+Optional TypeScript (npm workspaces; `npm install` at repo root, then `npm test`):
+
+```bash
+npm install
+npm test
 ```
 
 Developer installs (tests) also:

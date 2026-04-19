@@ -1,3 +1,4 @@
+node_modules/
 artifacts/
 spellbooks/**/artifacts/
 axiomurgy_workspace/

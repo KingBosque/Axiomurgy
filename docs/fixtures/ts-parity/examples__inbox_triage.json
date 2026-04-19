@@ -1,0 +1,12 @@
+{
+  "spell_path": "examples/inbox_triage.spell.json",
+  "input_text": "inbox_triage\nClassify inbox items, draft replies, require approval, then archive the processed queue.\nhigh",
+  "input": {
+    "intent": {
+      "objective": "inbox_triage\nClassify inbox items, draft replies, require approval, then archive the processed queue.\nhigh",
+      "scope": "axiomurgy:inbox_triage",
+      "reversibility": "IRREVERSIBLE",
+      "side_effect_tolerance": "HIGH"
+    }
+  }
+}

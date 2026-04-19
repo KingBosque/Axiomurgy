@@ -38,6 +38,23 @@ jobs:
         if: runner.os != 'Windows'
         run: bash scripts/smoke.sh
 
+  typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: npm install (workspaces)
+        run: npm install
+
+      - name: TypeScript tests
+        run: npm test
+
   # Optional: enable when a pinned Vermyth HTTP server or image is available in CI.
   vermyth_live:
     if: false
