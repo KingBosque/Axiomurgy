@@ -49,11 +49,18 @@ jobs:
           node-version: "20"
           cache: npm
 
-      - name: npm install (workspaces)
-        run: npm install
+      - name: npm install
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
-      - name: TypeScript tests
+      - name: TypeScript build
+        run: npm run build
+
+      - name: TypeScript tests (including parity fixtures)
         run: npm test
+
+      - name: TS parity gate (semantic recommend payload)
+        run: npm run test:parity
 
   # Optional: enable when a pinned Vermyth HTTP server or image is available in CI.
   vermyth_live:

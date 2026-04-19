@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from axiomurgy.legacy import load_spell
+from axiomurgy.vermyth_export import build_semantic_program
 from axiomurgy.vermyth_integration import _recommend_input_payload
 
 SPELLS = [
@@ -35,7 +36,16 @@ def main() -> int:
             "input": payload,
         }
         (out_dir / f"{stem}.json").write_text(json.dumps(obj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"Wrote {len(SPELLS)} files under {out_dir}")
+
+    # TS opt-in Vermyth compile_program smoke (must match Python build_semantic_program)
+    inbox = ROOT / "examples" / "inbox_triage.spell.json"
+    spell_inbox = load_spell(inbox)
+    prog = build_semantic_program(spell_inbox)
+    (out_dir / "inbox_triage_semantic_program.json").write_text(
+        json.dumps(prog, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    print(f"Wrote {len(SPELLS)} recommend fixtures + inbox_triage_semantic_program.json under {out_dir}")
     return 0
 
 

@@ -78,12 +78,25 @@ Runtime dependencies only:
 python -m pip install -r requirements.txt
 ```
 
-Optional TypeScript (npm workspaces; `npm install` at repo root, then `npm test`):
+### TypeScript seam (optional)
+
+The repo includes an npm workspace under `packages/` for JSON Schema validation, a Vermyth HTTP client, and semantic-seam helpers. **Python remains the reference runtime** for execution, planning authority, and bundled contracts.
+
+- **Canonical schemas for TS validation** are the same bundled files the Python runtime loads: `axiomurgy/bundled/spell.schema.json` and `spellbook.schema.json` (repo-root copies are mirrors; refresh with `python scripts/sync_contract_mirrors.py`).
+- **Lockfile:** run `npm install` at the repo root and **commit `package-lock.json`** when present so CI can use `npm ci` for reproducible installs.
+- **Root scripts:** `npm run build` (all workspaces), `npm test`, `npm run clean` (remove `packages/*/dist`), `npm run test:parity` (semantic recommend payload vs `docs/fixtures/ts-parity/`), `npm run test:ts:vermyth-smoke` (opt-in live HTTP; see below).
+- **CLIs** (`semantic-seam-status`, `eval-semantic-recommendations`) are emitted under `packages/semantic-seam/dist/cli/` after `npm run build`. For development without a build, use `npm run dev:semantic-seam-status` / `npm run dev:eval-semantic-recommendations` from the `packages/semantic-seam` workspace (runs `tsx` on sources).
+- **Parity fixtures:** regenerate with `python scripts/dump_ts_parity_fixtures.py` when the Python/Vermyth seam changes; `npm run test:parity` must match.
+
+**Opt-in live Vermyth smoke (TypeScript):**
 
 ```bash
-npm install
-npm test
+set AXIOMURGY_TS_VERMYTH_SMOKE=1
+set AXIOMURGY_VERMYTH_BASE_URL=http://127.0.0.1:7777
+npm run test:ts:vermyth-smoke
 ```
+
+(Unix: `export AXIOMURGY_TS_VERMYTH_SMOKE=1` …)
 
 Developer installs (tests) also:
 

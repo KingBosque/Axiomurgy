@@ -17,10 +17,13 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "dev:semantic-seam-status": "tsx src/cli/semantic-seam-status.ts",
+    "dev:eval-semantic-recommendations": "tsx src/cli/eval-semantic-recommendations.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

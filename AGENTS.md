@@ -7,7 +7,7 @@ Start here, in order:
 2. Read `RELAY_NOTES.md`.
 3. Read `NEXT_LAP_SPEC.md`.
 4. Skim `axiomurgy.py`, `axiomurgy/bundled/` (canonical schemas/policy), repo-root `spell.schema.json` / `spellbook.schema.json` (mirrors), `examples/`, `spellbooks/`, `policies/`, `adapters/`, `tests/`, and `scripts/`.
-5. Optional: `packages/` TypeScript workspace (`npm install` / `npm test`) for seam contracts and Vermyth HTTP tooling; Python remains authoritative for execution.
+5. Optional: `packages/` TypeScript workspace (`npm install`, `npm run build`, `npm test`, `npm run test:parity`) for seam contracts and Vermyth HTTP tooling; Python remains authoritative for execution. Commit `package-lock.json` after `npm install` so CI can use `npm ci`. TS validates spell/spellbook JSON against `axiomurgy/bundled/*.schema.json` (same source as the Python runtime; repo-root mirrors are checked by `sync_contract_mirrors.py`).
 
 For a working tree, install dependencies with `python -m pip install -e ".[dev]"` from the repository root (see `README.md` and `docs/CLI_CONTRACTS.md`).
 

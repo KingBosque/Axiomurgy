@@ -1,0 +1,135 @@
+{
+  "program_id": "axiomurgy-90da673e0581700cf7aa007a86a76808c1e980bb",
+  "name": "inbox_triage",
+  "status": "DRAFT",
+  "nodes": [
+    {
+      "node_id": "read_mail",
+      "node_type": "CAST",
+      "aspects": [
+        "VOID"
+      ],
+      "intent": {
+        "objective": "Classify inbox items, draft replies, require approval, then archive the processed queue.",
+        "scope": "axiomurgy:read_mail:mirror.read",
+        "reversibility": "REVERSIBLE",
+        "side_effect_tolerance": "HIGH"
+      },
+      "successors": [
+        "labels"
+      ],
+      "effects": [
+        {
+          "effect_type": "READ",
+          "target": null,
+          "reversible": true,
+          "cost_hint": 0.0
+        }
+      ]
+    },
+    {
+      "node_id": "labels",
+      "node_type": "CAST",
+      "aspects": [
+        "FORM"
+      ],
+      "intent": {
+        "objective": "Classify inbox items, draft replies, require approval, then archive the processed queue.",
+        "scope": "axiomurgy:labels:lantern.classify",
+        "reversibility": "REVERSIBLE",
+        "side_effect_tolerance": "HIGH"
+      },
+      "successors": [
+        "drafts"
+      ],
+      "effects": [
+        {
+          "effect_type": "COMPUTE",
+          "target": null,
+          "reversible": true,
+          "cost_hint": 0.0
+        }
+      ]
+    },
+    {
+      "node_id": "drafts",
+      "node_type": "CAST",
+      "aspects": [
+        "MOTION"
+      ],
+      "intent": {
+        "objective": "Classify inbox items, draft replies, require approval, then archive the processed queue.",
+        "scope": "axiomurgy:drafts:forge.reply_drafts",
+        "reversibility": "REVERSIBLE",
+        "side_effect_tolerance": "HIGH"
+      },
+      "successors": [
+        "approval"
+      ],
+      "effects": [
+        {
+          "effect_type": "COMPUTE",
+          "target": null,
+          "reversible": true,
+          "cost_hint": 0.0
+        }
+      ]
+    },
+    {
+      "node_id": "approval",
+      "node_type": "CAST",
+      "aspects": [
+        "MIND"
+      ],
+      "intent": {
+        "objective": "Classify inbox items, draft replies, require approval, then archive the processed queue.",
+        "scope": "axiomurgy:approval:seal.approval_gate",
+        "reversibility": "REVERSIBLE",
+        "side_effect_tolerance": "HIGH"
+      },
+      "successors": [
+        "archive"
+      ],
+      "effects": [
+        {
+          "effect_type": "COMPUTE",
+          "target": null,
+          "reversible": true,
+          "cost_hint": 0.0
+        }
+      ]
+    },
+    {
+      "node_id": "archive",
+      "node_type": "CAST",
+      "aspects": [
+        "DECAY"
+      ],
+      "intent": {
+        "objective": "Classify inbox items, draft replies, require approval, then archive the processed queue.",
+        "scope": "axiomurgy:archive:gate.archive",
+        "reversibility": "IRREVERSIBLE",
+        "side_effect_tolerance": "HIGH"
+      },
+      "successors": [],
+      "effects": [
+        {
+          "effect_type": "WRITE",
+          "target": null,
+          "reversible": false,
+          "cost_hint": 0.0
+        }
+      ]
+    }
+  ],
+  "entry_node_ids": [
+    "read_mail"
+  ],
+  "metadata": {
+    "axiomurgy_source_path": "C:\\Dev\\ARCANE\\axiomurgy\\examples\\inbox_triage.spell.json",
+    "axiomurgy_export": "0.1.0",
+    "unsupported_runes": []
+  },
+  "created_at": "2000-01-01T00:00:00+00:00",
+  "updated_at": "2000-01-01T00:00:00+00:00"
+}

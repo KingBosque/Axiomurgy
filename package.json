@@ -10,6 +10,12 @@
   },
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "test:parity": "npm exec --workspace=@axiomurgy/semantic-seam -- vitest run src/parity.test.ts",
+    "clean": "rimraf packages/contracts/dist packages/vermyth-http/dist packages/semantic-seam/dist",
+    "test:ts:vermyth-smoke": "npm exec --workspace=@axiomurgy/vermyth-http -- vitest run src/integration.smoke.test.ts"
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.1"
   }
 }
