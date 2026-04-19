@@ -1,0 +1,25 @@
+{
+  "spell": "reasoning_declared_telos_fixture",
+  "intent": "Fixture for declared telos in reasoning tests.",
+  "inputs": {
+    "msg": "probe"
+  },
+  "constraints": {
+    "risk": "low",
+    "telos": {
+      "final_cause": "Declared final cause for test",
+      "objectives": [
+        {"id": "o1", "summary": "First objective", "weight": 1.0}
+      ]
+    }
+  },
+  "graph": [
+    {
+      "id": "only",
+      "rune": "mirror.read",
+      "effect": "read",
+      "args": {"input": "$inputs.msg"}
+    }
+  ],
+  "rollback": []
+}

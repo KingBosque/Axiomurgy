@@ -10,8 +10,14 @@ from unittest import mock
 from axiomurgy.planning import build_plan_summary, resolve_run_target
 from axiomurgy.describe import describe_target
 from axiomurgy.review import _attestation_allowlisted_path, compare_reviewed_bundle
-from axiomurgy.reasoning_bundle import REASONING_VERSION, reasoning_enabled, reasoning_experimental_enabled
-from axiomurgy.wyrd.store import append_node, read_wyrd_hints
+from axiomurgy.reasoning_bundle import (
+    DERIVED_KEYS_MINIMAL,
+    REASONING_EXPERIMENTAL_BLOCK_KEYS,
+    REASONING_VERSION,
+    reasoning_enabled,
+    reasoning_experimental_enabled,
+)
+from axiomurgy.wyrd.store import append_node, build_wyrd_hints
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -25,7 +31,7 @@ class TestReasoningAllowlist(unittest.TestCase):
 
     def test_experimental_subtree_allowlisted(self) -> None:
         self.assertTrue(_attestation_allowlisted_path("plan.reasoning.experimental"))
-        self.assertTrue(_attestation_allowlisted_path("plan.reasoning.experimental.friction.write_step_count"))
+        self.assertTrue(_attestation_allowlisted_path("plan.reasoning.experimental.friction.overall_friction.value"))
 
     def test_stray_reasoning_keys_not_allowlisted(self) -> None:
         self.assertFalse(_attestation_allowlisted_path("plan.reasoning_extra"))
@@ -82,6 +88,12 @@ class TestReasoningPlanDescribe(unittest.TestCase):
         self.assertIn("classification", r)
         self.assertEqual(r["classification"].get("surface"), "minimal_advisory")
         self.assertFalse(r["classification"].get("experimental_enabled"))
+        self.assertEqual(
+            set(r["classification"]["derived_keys"]),
+            set(DERIVED_KEYS_MINIMAL),
+            "classification.derived_keys must match the minimal contract exactly",
+        )
+        self.assertEqual(r["classification"].get("experimental_keys"), [])
         self.assertIn("governor", r)
         self.assertIn("telos", r)
         self.assertIn("final_cause", r["telos"])
@@ -113,6 +125,46 @@ class TestReasoningPlanDescribe(unittest.TestCase):
         self.assertIn("combinatorics_search", ex)
         self.assertIn("wyrd_hints", ex)
         self.assertIn("generation_candidates", ex)
+        dk = set(r["classification"]["derived_keys"])
+        self.assertTrue(set(DERIVED_KEYS_MINIMAL).issubset(dk))
+        self.assertIn("experimental", dk)
+        self.assertGreater(len(dk), len(set(DERIVED_KEYS_MINIMAL)))
+        self.assertEqual(
+            r["classification"]["experimental_keys"],
+            sorted(REASONING_EXPERIMENTAL_BLOCK_KEYS),
+        )
+
+    def test_experimental_subtree_is_flat_no_nested_classification(self) -> None:
+        """reasoning.experimental stays one level: no nested maturity taxonomies."""
+        spell_path = ROOT / "examples" / "inbox_triage.spell.json"
+        if not spell_path.is_file():
+            self.skipTest("example spell missing")
+        resolved = resolve_run_target(spell_path, None, None, None)
+        with mock.patch.dict(
+            os.environ,
+            {"AXIOMURGY_REASONING": "1", "AXIOMURGY_REASONING_EXPERIMENTAL": "1"},
+            clear=False,
+        ):
+            from axiomurgy.reasoning_bundle import build_reasoning_payload
+
+            r = build_reasoning_payload(resolved)
+        ex = r["experimental"]
+
+        def assert_no_maturity_keys(obj: object, path: str) -> None:
+            banned = {"classification", "derived_keys"}
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    self.assertNotIn(
+                        k,
+                        banned,
+                        msg=f"unexpected maturity key at {path}.{k} (keep experimental non-recursive)",
+                    )
+                    assert_no_maturity_keys(v, f"{path}.{k}")
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj):
+                    assert_no_maturity_keys(item, f"{path}[{i}]")
+
+        assert_no_maturity_keys(ex, "experimental")
 
     def test_compare_reviewed_ignores_reasoning_drift(self) -> None:
         reviewed = {
@@ -144,17 +196,19 @@ class TestWyrdStore(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             ad = Path(tmp)
-            append_node(ad, "test", {"k": 1})
-            hints = read_wyrd_hints(ad)
-            self.assertEqual(len(hints), 1)
-            self.assertEqual(hints[0]["kind"], "test")
-            self.assertEqual(hints[0]["payload"], {"k": 1})
+            append_node(ad, "telos", {"final_cause": "probe", "spell_name": "s1", "k": 1})
+            hints = build_wyrd_hints(ad, spell_name="s1")
+            self.assertEqual(hints["kind"], "derived")
+            self.assertEqual(len(hints["recent_nodes"]), 1)
+            self.assertEqual(hints["recent_nodes"][0]["kind"], "telos")
 
     def test_missing_db_empty(self) -> None:
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertEqual(read_wyrd_hints(Path(tmp)), [])
+            h = build_wyrd_hints(Path(tmp), spell_name="x")
+            self.assertEqual(h["recent_nodes"], [])
+            self.assertIn("no_wyrd_database", h["consistency_notes"])
 
 
 class TestReasoningEnabled(unittest.TestCase):

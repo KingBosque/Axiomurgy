@@ -35,6 +35,8 @@ The following paths are **byte-identical mirrors** of the bundled files above. T
 ## Related docs
 
 - [CLI_CONTRACTS.md](CLI_CONTRACTS.md) — invocation, exit codes, `--artifact-dir` behavior.
+- [REASONING_SURFACES.md](REASONING_SURFACES.md) — optional `--describe` / `--plan` `reasoning` minimal vs experimental surfaces.
+- [WYRD_STORAGE.md](WYRD_STORAGE.md) — optional Wyrd v1 SQLite layout (experimental; not a contract schema).
 
 ## Remaining release risks (ranked)
 

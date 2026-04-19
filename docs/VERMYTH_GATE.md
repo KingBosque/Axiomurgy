@@ -46,7 +46,7 @@ The helper `_attestation_allowlisted_path` is **defensive**: if future diffs add
 
 **Compatibility note:** New plan fields that are not part of the fixed compare set are invisible to attestation unless compare logic is extended.
 
-**Reasoning (v2.1+):** The exact keys `plan.reasoning` / `describe.reasoning` and nested paths under `plan.reasoning.{axiomurgy_reasoning_version,classification,governor,telos,scene,dialectic,habitus,experimental}` (and the same for `describe.reasoning.*`) are allowlisted. Stray siblings such as `plan.reasoning.correspondence` (top-level) are **not** allowlisted — use `plan.reasoning.experimental.correspondence` when experimental mode is on. Unrelated keys such as `plan.reasoning_extra` are not allowlisted.
+**Reasoning (v2.1+):** The exact keys `plan.reasoning` / `describe.reasoning` and nested paths under `plan.reasoning.{axiomurgy_reasoning_version,classification,governor,telos,scene,dialectic,habitus,experimental}` (and the same for `describe.reasoning.*`) are allowlisted. Deeper telos/governor/dialectic fields (e.g. `plan.reasoning.telos.step_scores`) remain under those prefixes. `classification` includes `derived_keys` (minimal vs superset when experimental). Stray siblings such as `plan.reasoning.correspondence` (top-level) are **not** allowlisted — use `plan.reasoning.experimental.correspondence` when experimental mode is on. Unrelated keys such as `plan.reasoning_extra` are not allowlisted.
 
 ## Execution paths (replay vs execute vs Ouroboros)
 

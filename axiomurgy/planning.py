@@ -378,63 +378,17 @@ def capability_manifest_for_plan(plan: List[Step]) -> Dict[str, Any]:
 
 
 
-def build_approval_manifest(
+def expand_plan_rows_for_static_policy(
     resolved: ResolvedRunTarget,
-    steps: List[Dict[str, Any]],
-    required_approvals: List[Dict[str, Any]],
-    write_steps: List[Dict[str, Any]],
-    external_calls: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-    input_classification = classify_input_manifest(resolved.spell)
-    plan = compile_plan(resolved.spell)
-    capabilities = capability_manifest_for_plan(plan)
-    return {
-        "spell": resolved.spell.name,
-        "spellbook": {
-            "name": resolved.spellbook.name,
-            "version": resolved.spellbook.version,
-            "entrypoint": resolved.entrypoint,
-            "path": str(resolved.spellbook.source_path),
-        } if resolved.spellbook is not None else None,
-        "policy_path": str(resolved.policy_path),
-        "artifact_dir": str(resolved.artifact_dir),
-        "risk": str(resolved.spell.constraints.get("risk", "low")),
-        "required_approvals": required_approvals,
-        "write_steps": write_steps,
-        "external_calls": external_calls,
-        "input_manifest": input_classification["summary"],
-        "capabilities": {"required": capabilities.get("required", []), "envelope": capabilities.get("envelope", {})},
-        "simulate_recommendation": bool(required_approvals or external_calls or write_steps),
-        "ordered_steps": [
-            {
-                "index": item["index"],
-                "step_id": item["step_id"],
-                "rune": item["rune"],
-                "effect": item["effect"],
-            }
-            for item in steps
-        ],
-    }
-
-
-
-def build_plan_summary(
-    resolved: ResolvedRunTarget,
-    approvals: Optional[Set[str]] = None,
-    simulate: bool = False,
-    *,
-    vermyth_program: bool = False,
-    vermyth_validate: bool = False,
-    vermyth_recommendations: bool = False,
-) -> Dict[str, Any]:
-    approvals = approvals or set()
-    policy = load_json(resolved.policy_path)
-    repo_root = ROOT
-    fingerprints = compute_spell_fingerprints(resolved.spell, resolved.policy_path, repo_root=repo_root)
-    if resolved.spellbook is not None:
-        fingerprints["spellbook"] = compute_spellbook_fingerprints(resolved, repo_root=repo_root)
-    plan = compile_plan(resolved.spell)
-    capabilities = capability_manifest_for_plan(plan)
+    plan: List[Step],
+    policy: Dict[str, Any],
+    approvals: Set[str],
+    simulate: bool,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Same step row construction as build_plan_summary (static policy only).
+    Used for plan output and for reasoning shadow context on describe/plan.
+    """
     static_values = {"inputs": resolved.spell.inputs}
     step_rows: List[Dict[str, Any]] = []
     required_approvals: List[Dict[str, Any]] = []
@@ -496,6 +450,92 @@ def build_plan_summary(
                     "granted": decision.approved,
                 }
             )
+    return step_rows, write_steps, required_approvals, external_calls
+
+
+def build_reasoning_plan_context(
+    resolved: ResolvedRunTarget,
+    approvals: Optional[Set[str]] = None,
+    simulate: bool = False,
+) -> Dict[str, Any]:
+    """
+    Deterministic plan snapshot for reasoning (describe path: no full plan JSON).
+    Matches build_plan_summary step rows for the same approvals/simulate.
+    """
+    approvals = approvals or set()
+    policy = load_json(resolved.policy_path)
+    plan = compile_plan(resolved.spell)
+    step_rows, write_steps, required_approvals, external_calls = expand_plan_rows_for_static_policy(
+        resolved, plan, policy, approvals, simulate
+    )
+    return {
+        "steps": step_rows,
+        "write_steps": write_steps,
+        "required_approvals": required_approvals,
+        "external_calls": external_calls,
+    }
+
+
+def build_approval_manifest(
+    resolved: ResolvedRunTarget,
+    steps: List[Dict[str, Any]],
+    required_approvals: List[Dict[str, Any]],
+    write_steps: List[Dict[str, Any]],
+    external_calls: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    input_classification = classify_input_manifest(resolved.spell)
+    plan = compile_plan(resolved.spell)
+    capabilities = capability_manifest_for_plan(plan)
+    return {
+        "spell": resolved.spell.name,
+        "spellbook": {
+            "name": resolved.spellbook.name,
+            "version": resolved.spellbook.version,
+            "entrypoint": resolved.entrypoint,
+            "path": str(resolved.spellbook.source_path),
+        } if resolved.spellbook is not None else None,
+        "policy_path": str(resolved.policy_path),
+        "artifact_dir": str(resolved.artifact_dir),
+        "risk": str(resolved.spell.constraints.get("risk", "low")),
+        "required_approvals": required_approvals,
+        "write_steps": write_steps,
+        "external_calls": external_calls,
+        "input_manifest": input_classification["summary"],
+        "capabilities": {"required": capabilities.get("required", []), "envelope": capabilities.get("envelope", {})},
+        "simulate_recommendation": bool(required_approvals or external_calls or write_steps),
+        "ordered_steps": [
+            {
+                "index": item["index"],
+                "step_id": item["step_id"],
+                "rune": item["rune"],
+                "effect": item["effect"],
+            }
+            for item in steps
+        ],
+    }
+
+
+
+def build_plan_summary(
+    resolved: ResolvedRunTarget,
+    approvals: Optional[Set[str]] = None,
+    simulate: bool = False,
+    *,
+    vermyth_program: bool = False,
+    vermyth_validate: bool = False,
+    vermyth_recommendations: bool = False,
+) -> Dict[str, Any]:
+    approvals = approvals or set()
+    policy = load_json(resolved.policy_path)
+    repo_root = ROOT
+    fingerprints = compute_spell_fingerprints(resolved.spell, resolved.policy_path, repo_root=repo_root)
+    if resolved.spellbook is not None:
+        fingerprints["spellbook"] = compute_spellbook_fingerprints(resolved, repo_root=repo_root)
+    plan = compile_plan(resolved.spell)
+    capabilities = capability_manifest_for_plan(plan)
+    step_rows, write_steps, required_approvals, external_calls = expand_plan_rows_for_static_policy(
+        resolved, plan, policy, approvals, simulate
+    )
     manifest = build_approval_manifest(resolved, step_rows, required_approvals, write_steps, external_calls)
     out = {
         "mode": "plan",

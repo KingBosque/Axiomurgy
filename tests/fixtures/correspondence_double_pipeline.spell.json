@@ -1,0 +1,48 @@
+{
+  "spell": "correspondence_double_pipeline_fixture",
+  "intent": "Two disjoint read→transform→write chains to exercise duplicated pipeline detection.",
+  "inputs": {
+    "a": "x",
+    "b": "y"
+  },
+  "graph": [
+    {
+      "id": "r1",
+      "rune": "mirror.read",
+      "effect": "read",
+      "args": { "input": "$inputs.a" }
+    },
+    {
+      "id": "t1",
+      "rune": "lantern.classify",
+      "effect": "transform",
+      "args": { "items": "$r1" }
+    },
+    {
+      "id": "w1",
+      "rune": "gate.archive",
+      "effect": "write",
+      "args": { "from": "$t1" }
+    },
+    {
+      "id": "r2",
+      "rune": "mirror.read",
+      "effect": "read",
+      "args": { "input": "$inputs.b" }
+    },
+    {
+      "id": "t2",
+      "rune": "lantern.classify",
+      "effect": "transform",
+      "args": { "items": "$r2" }
+    },
+    {
+      "id": "w2",
+      "rune": "gate.archive",
+      "effect": "write",
+      "args": { "from": "$t2" }
+    }
+  ],
+  "rollback": [],
+  "witness": { "record": false }
+}

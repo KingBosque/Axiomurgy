@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "description": "Small maintainable corpus for advisory reasoning efficacy evaluation (not execution benchmarks).",
+  "spells": [
+    {
+      "path": "examples/calibration/readonly_probe_low_risk.spell.json",
+      "family": "read_heavy_reversible",
+      "expect": {
+        "no_candidate_expected": true,
+        "wyrd_expected_to_matter": false
+      }
+    },
+    {
+      "path": "examples/openapi_ticket_then_fail.spell.json",
+      "family": "external_boundary_write_heavy",
+      "expect": {
+        "candidates_expected": true,
+        "likely_preferred_kinds": ["risk_reduction_variant", "boundary_isolation_variant"],
+        "wyrd_expected_to_matter": false
+      }
+    },
+    {
+      "path": "examples/inbox_triage.spell.json",
+      "family": "approval_review_multi_cluster",
+      "expect": {
+        "candidates_expected": true,
+        "likely_preferred_kinds": ["approval_first_variant", "subgoal_split"],
+        "wyrd_expected_to_matter": false
+      }
+    },
+    {
+      "path": "examples/primer_to_axioms.spell.json",
+      "family": "simple_core",
+      "expect": {
+        "candidates_expected": false,
+        "wyrd_expected_to_matter": false
+      }
+    },
+    {
+      "path": "examples/calibration/write_only_high_risk.spell.json",
+      "family": "negative_control_sparse",
+      "expect": {
+        "no_candidate_expected": false,
+        "wyrd_expected_to_matter": false
+      }
+    }
+  ]
+}
