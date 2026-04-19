@@ -22,6 +22,11 @@ def _attestation_allowlisted_path(path: str) -> bool:
         return True
     if path.startswith("describe.culture"):
         return True
+    # Metaphysical reasoning (v1): allowlisted only — not required for attestation.
+    if path == "plan.reasoning" or path.startswith("plan.reasoning."):
+        return True
+    if path == "describe.reasoning" or path.startswith("describe.reasoning."):
+        return True
     return False
 
 

@@ -533,4 +533,7 @@ def build_plan_summary(
             vermyth_validate=vermyth_validate,
             vermyth_recommendations=vermyth_recommendations,
         )
+    from .reasoning_bundle import attach_reasoning_to_plan
+
+    attach_reasoning_to_plan(out, resolved)
     return out

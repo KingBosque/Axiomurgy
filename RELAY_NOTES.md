@@ -22,6 +22,7 @@ What this lap adds:
 - Ouroboros Chamber (v1.8): **`run_id`**, per-run **`artifact_root`** under **`ouroboros_runs/`**, **`run_manifest`**, witness **`run_capsule`**; optional **`run_capsule`** retention flags
 - Ouroboros Chamber (v1.9): **`revolution_capsules`** (nested under **`run_capsule`**), per-revolution artifact roots **`revolutions/rev_NNNN/`** for executed veil attempts, **`proposal_id_to_revolution_id`**, revolution counts on witness / manifest / cycle result; preflight skips get capsule rows only; optional **`revolution_retention`** (default preserve all)
 - Ouroboros Chamber (v2.0): **`replay_record.json`** per executed veil; **`--replay-revolution-dir`** / **`--replay-run-manifest`** + **`--replay-revolution-id`**; **`replay_summary`** artifacts; deterministic **`replay_status`**; no writes under source **`revolutions/`**
+- Optional metaphysical reasoning (v2.1): advisory **`plan.reasoning`** / **`describe.reasoning`** when **`AXIOMURGY_REASONING=1`** (default off); **`telos.final_cause` / `telos.objectives`** separate from Ouroboros **`acceptance_contract`**; attestation allowlist-only for reasoning paths; optional **`AXIOMURGY_WYRD=1`** + SQLite hints under **`<artifact-dir>/wyrd/graph.sqlite`**
 
 Verified demos in this relay:
 - `python axiomurgy.py spellbooks/primer_codex --describe`

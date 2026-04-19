@@ -53,6 +53,12 @@ class TestVermythExport(unittest.TestCase):
         self.assertFalse(_attestation_allowlisted_path("plan.semantic_recommendation"))
         self.assertFalse(_attestation_allowlisted_path("plan.semantic_recommendation.items"))
 
+    def test_reasoning_paths_allowlisted(self) -> None:
+        self.assertTrue(_attestation_allowlisted_path("plan.reasoning"))
+        self.assertTrue(_attestation_allowlisted_path("plan.reasoning.telos.objectives"))
+        self.assertTrue(_attestation_allowlisted_path("describe.reasoning"))
+        self.assertFalse(_attestation_allowlisted_path("plan.reasoning_extra"))
+
     def test_simulated_diff_skips_allowlisted_paths_only(self) -> None:
         def simulated_diff(path: str, reviewed_v: object, current_v: object) -> str | None:
             if _attestation_allowlisted_path(path):

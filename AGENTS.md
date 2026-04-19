@@ -79,6 +79,9 @@ This v1.9 relay adds:
 This v2.0 relay adds:
 - **Replay** for executed Ouroboros revolutions: **`replay_record.json`** per veil; CLI **`--replay-revolution-dir`** or **`--replay-run-manifest`** + **`--replay-revolution-id`** with optional **`--replay-artifact-dir`**; mechanical **`replay_status`** (`match` / `drift` / `non_replayable`) comparing score, seal, execution fingerprint slice, and optional attestation; isolated replay witnesses; spellbook targets **`non_replayable`**
 
+This v2.1 relay adds:
+- Optional **metaphysical reasoning** on **`--describe`** / **`--plan`** when **`AXIOMURGY_REASONING=1`** (default off): advisory **`reasoning`** blocks (governor projection, **`telos.final_cause` / `telos.objectives`**, dialectic shell, scene, habitus, correspondence, friction, combinatorics search, Wyrd hints, generation candidates); **`telos`** is separate from Ouroboros **`acceptance_contract`**; reasoning paths are **allowlisted** in review-bundle compare (not required for attestation); optional **`AXIOMURGY_WYRD=1`** reads **`wyrd_hints`** from **`<artifact-dir>/wyrd/graph.sqlite`**
+
 ## Non-negotiable invariants
 
 Do not remove or weaken these without updating docs, examples, and tests together:

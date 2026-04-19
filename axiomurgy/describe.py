@@ -69,6 +69,9 @@ def describe_target(resolved: ResolvedRunTarget) -> Dict[str, Any]:
     ch = culture_hints_for_describe()
     if ch is not None:
         description["culture"] = ch
+    from .reasoning_bundle import attach_reasoning_to_describe
+
+    attach_reasoning_to_describe(description, resolved)
     return description
 
 

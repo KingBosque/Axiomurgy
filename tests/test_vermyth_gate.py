@@ -38,7 +38,7 @@ def _minimal_spell() -> Spell:
 
 def _policy_gate(**kwargs: object) -> dict:
     base = {
-        "version": "2.0.0",
+        "version": "2.1.0",
         "requires_approval": [],
         "deny": [],
         "vermyth_gate": {
@@ -175,7 +175,7 @@ class TestVermythGateTransport(unittest.TestCase):
     @patch("axiomurgy.vermyth_integration._env_base_url", return_value=None)
     def test_on_timeout_deny_raises_on_missing_url(self, _mock_url: object) -> None:
         pol = {
-            "version": "2.0.0",
+            "version": "2.1.0",
             "requires_approval": [],
             "deny": [],
             "vermyth_gate": {

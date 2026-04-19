@@ -1,6 +1,6 @@
 # Axiomurgy v1.1 target
 
-**Status:** Ouroboros v2.0 (v1.9 revolution dirs + **`replay_record.json`** + CLI replay with **`match`/`drift`/`non_replayable`**; plus v1.6–v1.7 acceptance and lineage) is implemented in the reference runtime; see `README.md` (Ouroboros section) for the current shape.
+**Status:** Ouroboros v2.0 (v1.9 revolution dirs + **`replay_record.json`** + CLI replay with **`match`/`drift`/`non_replayable`**; plus v1.6–v1.7 acceptance and lineage) is implemented in the reference runtime; see `README.md` (Ouroboros section) for the current shape. Runtime **v2.1** adds optional **`AXIOMURGY_REASONING`** describe/plan reasoning blocks (see `README.md`, `RELAY_NOTES.md`).
 
 ## Working title
 

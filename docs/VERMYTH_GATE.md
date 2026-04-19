@@ -46,6 +46,8 @@ The helper `_attestation_allowlisted_path` is **defensive**: if future diffs add
 
 **Compatibility note:** New plan fields that are not part of the fixed compare set are invisible to attestation unless compare logic is extended.
 
+**Reasoning (v2.1):** Paths `plan.reasoning` and `describe.reasoning` (exact key or nested `plan.reasoning.*` / `describe.reasoning.*`) are allowlisted so optional advisory reasoning blocks do not false-mismatch attestation. This does not apply to unrelated keys such as `plan.reasoning_extra`.
+
 ## Execution paths (replay vs execute vs Ouroboros)
 
 When `main` resolves a target:

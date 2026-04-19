@@ -120,7 +120,7 @@ class TestVermythCliClosedPort(unittest.TestCase):
         from axiomurgy.vermyth_integration import run_vermyth_gate
 
         pol = {
-            "version": "2.0.0",
+            "version": "2.1.0",
             "requires_approval": [],
             "deny": [],
             "vermyth_gate": {

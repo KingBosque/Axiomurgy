@@ -54,7 +54,7 @@ from .util import (
     utc_now,
 )
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 MCP_PROTOCOL_VERSION = "2025-11-25"
 RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 HTTP_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}

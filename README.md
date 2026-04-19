@@ -160,6 +160,10 @@ python axiomurgy.py spellbooks/primer_codex --approve publish \
   --review-bundle-in spellbooks/primer_codex/artifacts/primer_codex_publish_v0_7.review_bundle.json
 ```
 
+## Optional metaphysical reasoning (v2.1)
+
+When **`AXIOMURGY_REASONING=1`**, `--describe` and `--plan` may include an advisory **`reasoning`** object (governor projection, **`telos.final_cause` / `telos.objectives`**, dialectic shell, scene, habitus, correspondence, friction, combinatorics search, Wyrd hints, generation candidates). Default is off so fingerprints and attestation behavior are unchanged. Reasoning paths are **allowlisted** in review-bundle compare (not required for attestation). **`AXIOMURGY_WYRD=1`** reads optional **`wyrd_hints`** from `<artifact-dir>/wyrd/graph.sqlite` when reasoning is enabled.
+
 ## Ouroboros Chamber (v1.8–v2.0, optional)
 
 Ouroboros Chamber is an **opt-in, bounded cyclic runner** for supervised iterative improvement.
