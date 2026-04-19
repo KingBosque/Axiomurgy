@@ -80,7 +80,7 @@ This v2.0 relay adds:
 - **Replay** for executed Ouroboros revolutions: **`replay_record.json`** per veil; CLI **`--replay-revolution-dir`** or **`--replay-run-manifest`** + **`--replay-revolution-id`** with optional **`--replay-artifact-dir`**; mechanical **`replay_status`** (`match` / `drift` / `non_replayable`) comparing score, seal, execution fingerprint slice, and optional attestation; isolated replay witnesses; spellbook targets **`non_replayable`**
 
 This v2.1 relay adds:
-- Optional **metaphysical reasoning** on **`--describe`** / **`--plan`** when **`AXIOMURGY_REASONING=1`** (default off): advisory **`reasoning`** blocks (governor projection, **`telos.final_cause` / `telos.objectives`**, dialectic shell, scene, habitus, correspondence, friction, combinatorics search, Wyrd hints, generation candidates); **`telos`** is separate from Ouroboros **`acceptance_contract`**; reasoning paths are **allowlisted** in review-bundle compare (not required for attestation); optional **`AXIOMURGY_WYRD=1`** reads **`wyrd_hints`** from **`<artifact-dir>/wyrd/graph.sqlite`**
+- Optional **metaphysical reasoning** on **`--describe`** / **`--plan`** when **`AXIOMURGY_REASONING=1`** (default off): minimal advisory **`reasoning`** (`classification`, governor, **`telos.final_cause` / `telos.objectives`**, dialectic, scene, habitus as descriptive context); **`telos`** is separate from Ouroboros **`acceptance_contract`**; phase-advanced blocks only under **`reasoning.experimental`** when **`AXIOMURGY_REASONING_EXPERIMENTAL=1`**; narrow attestation allowlist for contracted subtrees only; optional **`AXIOMURGY_WYRD=1`** fills **`experimental.wyrd_hints`** from **`<artifact-dir>/wyrd/graph.sqlite`**
 
 ## Non-negotiable invariants
 

@@ -162,7 +162,7 @@ python axiomurgy.py spellbooks/primer_codex --approve publish \
 
 ## Optional metaphysical reasoning (v2.1)
 
-When **`AXIOMURGY_REASONING=1`**, `--describe` and `--plan` may include an advisory **`reasoning`** object (governor projection, **`telos.final_cause` / `telos.objectives`**, dialectic shell, scene, habitus, correspondence, friction, combinatorics search, Wyrd hints, generation candidates). Default is off so fingerprints and attestation behavior are unchanged. Reasoning paths are **allowlisted** in review-bundle compare (not required for attestation). **`AXIOMURGY_WYRD=1`** reads optional **`wyrd_hints`** from `<artifact-dir>/wyrd/graph.sqlite` when reasoning is enabled.
+When **`AXIOMURGY_REASONING=1`**, `--describe` and `--plan` may include a small advisory **`reasoning`** object: **`classification`** (what is stable vs experimental), **`governor`**, **`telos`** (`final_cause` / `objectives`), **`scene`**, **`dialectic`**, and **`habitus`** (descriptive context only: paths, not policy). Default is off so fingerprints and attestation behavior are unchanged. Phase-advanced blocks (**correspondence**, **friction**, **combinatorics_search**, **wyrd_hints**, **generation_candidates**) appear only under **`reasoning.experimental`** when **`AXIOMURGY_REASONING_EXPERIMENTAL=1`**. With experimental on, **`AXIOMURGY_WYRD=1`** can populate **`experimental.wyrd_hints`** from `<artifact-dir>/wyrd/graph.sqlite`. Allowlisted attestation paths match this minimal surface plus **`reasoning.experimental.*`** only.
 
 ## Ouroboros Chamber (v1.8–v2.0, optional)
 

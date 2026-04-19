@@ -10,28 +10,36 @@ from unittest import mock
 from axiomurgy.planning import build_plan_summary, resolve_run_target
 from axiomurgy.describe import describe_target
 from axiomurgy.review import _attestation_allowlisted_path, compare_reviewed_bundle
-from axiomurgy.reasoning_bundle import REASONING_VERSION, reasoning_enabled
+from axiomurgy.reasoning_bundle import REASONING_VERSION, reasoning_enabled, reasoning_experimental_enabled
 from axiomurgy.wyrd.store import append_node, read_wyrd_hints
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class TestReasoningAllowlist(unittest.TestCase):
-    def test_plan_describe_reasoning_paths(self) -> None:
+    def test_minimal_surface_paths_allowlisted(self) -> None:
         self.assertTrue(_attestation_allowlisted_path("plan.reasoning"))
+        self.assertTrue(_attestation_allowlisted_path("plan.reasoning.classification.surface"))
         self.assertTrue(_attestation_allowlisted_path("plan.reasoning.telos.final_cause"))
-        self.assertTrue(_attestation_allowlisted_path("describe.reasoning"))
-        self.assertTrue(_attestation_allowlisted_path("describe.reasoning.governor.id"))
+        self.assertTrue(_attestation_allowlisted_path("describe.reasoning.habitus.kind"))
 
-    def test_adjacent_paths_not_allowlisted(self) -> None:
+    def test_experimental_subtree_allowlisted(self) -> None:
+        self.assertTrue(_attestation_allowlisted_path("plan.reasoning.experimental"))
+        self.assertTrue(_attestation_allowlisted_path("plan.reasoning.experimental.friction.write_step_count"))
+
+    def test_stray_reasoning_keys_not_allowlisted(self) -> None:
         self.assertFalse(_attestation_allowlisted_path("plan.reasoning_extra"))
         self.assertFalse(_attestation_allowlisted_path("plan.reason"))
+        # Top-level phase-advanced keys are not in the contract (use reasoning.experimental.*).
+        self.assertFalse(_attestation_allowlisted_path("plan.reasoning.correspondence"))
+        self.assertFalse(_attestation_allowlisted_path("plan.reasoning.wyrd_hints"))
 
 
 class TestReasoningPlanDescribe(unittest.TestCase):
     def setUp(self) -> None:
         self._old = os.environ.get("AXIOMURGY_REASONING")
         self._old_wyrd = os.environ.get("AXIOMURGY_WYRD")
+        self._old_exp = os.environ.get("AXIOMURGY_REASONING_EXPERIMENTAL")
 
     def tearDown(self) -> None:
         if self._old is None:
@@ -42,6 +50,10 @@ class TestReasoningPlanDescribe(unittest.TestCase):
             os.environ.pop("AXIOMURGY_WYRD", None)
         else:
             os.environ["AXIOMURGY_WYRD"] = self._old_wyrd
+        if self._old_exp is None:
+            os.environ.pop("AXIOMURGY_REASONING_EXPERIMENTAL", None)
+        else:
+            os.environ["AXIOMURGY_REASONING_EXPERIMENTAL"] = self._old_exp
 
     def test_default_no_reasoning_keys(self) -> None:
         os.environ.pop("AXIOMURGY_REASONING", None)
@@ -55,7 +67,8 @@ class TestReasoningPlanDescribe(unittest.TestCase):
         self.assertNotIn("reasoning", desc)
 
     @mock.patch.dict(os.environ, {"AXIOMURGY_REASONING": "1"}, clear=False)
-    def test_reasoning_present_when_enabled(self) -> None:
+    def test_reasoning_minimal_surface_when_enabled(self) -> None:
+        os.environ.pop("AXIOMURGY_REASONING_EXPERIMENTAL", None)
         spell_path = ROOT / "examples" / "inbox_triage.spell.json"
         if not spell_path.is_file():
             self.skipTest("example spell missing")
@@ -66,6 +79,9 @@ class TestReasoningPlanDescribe(unittest.TestCase):
         self.assertIn("reasoning", desc)
         r = plan["reasoning"]
         self.assertEqual(r.get("axiomurgy_reasoning_version"), REASONING_VERSION)
+        self.assertIn("classification", r)
+        self.assertEqual(r["classification"].get("surface"), "minimal_advisory")
+        self.assertFalse(r["classification"].get("experimental_enabled"))
         self.assertIn("governor", r)
         self.assertIn("telos", r)
         self.assertIn("final_cause", r["telos"])
@@ -73,11 +89,30 @@ class TestReasoningPlanDescribe(unittest.TestCase):
         self.assertIn("dialectic", r)
         self.assertIn("scene", r)
         self.assertIn("habitus", r)
-        self.assertIn("correspondence", r)
-        self.assertIn("friction", r)
-        self.assertIn("combinatorics_search", r)
-        self.assertIn("wyrd_hints", r)
-        self.assertIn("generation_candidates", r)
+        self.assertEqual(r["habitus"].get("kind"), "descriptive_context")
+        self.assertNotIn("experimental", r)
+        self.assertNotIn("correspondence", r)
+        self.assertNotIn("friction", r)
+        self.assertNotIn("combinatorics_search", r)
+        self.assertNotIn("wyrd_hints", r)
+        self.assertNotIn("generation_candidates", r)
+
+    @mock.patch.dict(os.environ, {"AXIOMURGY_REASONING": "1", "AXIOMURGY_REASONING_EXPERIMENTAL": "1"}, clear=False)
+    def test_experimental_block_when_flag(self) -> None:
+        spell_path = ROOT / "examples" / "inbox_triage.spell.json"
+        if not spell_path.is_file():
+            self.skipTest("example spell missing")
+        resolved = resolve_run_target(spell_path, None, None, None)
+        plan = build_plan_summary(resolved)
+        r = plan["reasoning"]
+        self.assertTrue(r["classification"].get("experimental_enabled"))
+        self.assertIn("experimental", r)
+        ex = r["experimental"]
+        self.assertIn("correspondence", ex)
+        self.assertIn("friction", ex)
+        self.assertIn("combinatorics_search", ex)
+        self.assertIn("wyrd_hints", ex)
+        self.assertIn("generation_candidates", ex)
 
     def test_compare_reviewed_ignores_reasoning_drift(self) -> None:
         reviewed = {
@@ -123,8 +158,10 @@ class TestWyrdStore(unittest.TestCase):
 
 
 class TestReasoningEnabled(unittest.TestCase):
-    def test_flag(self) -> None:
+    def test_flags(self) -> None:
         with mock.patch.dict(os.environ, {"AXIOMURGY_REASONING": "1"}):
             self.assertTrue(reasoning_enabled())
         with mock.patch.dict(os.environ, {"AXIOMURGY_REASONING": "0"}):
             self.assertFalse(reasoning_enabled())
+        with mock.patch.dict(os.environ, {"AXIOMURGY_REASONING_EXPERIMENTAL": "1"}):
+            self.assertTrue(reasoning_experimental_enabled())

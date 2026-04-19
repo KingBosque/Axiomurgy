@@ -63,7 +63,7 @@ Full gate semantics, attestation notes, and replay/Ouroboros divergence are docu
 - **`--vermyth-receipt`**: with execution + witness recording, also writes `*.vermyth_receipt.json` (unsigned cross-reference). Alternatively `AXIOMURGY_VERMYTH_RECEIPT=1`.
 - **Policy** `vermyth_gate`: see [VERMYTH_GATE.md](VERMYTH_GATE.md).
 - **Culture memory**: `AXIOMURGY_CULTURE=1` adds an optional `culture` block to `--describe` when `AXIOMURGY_CULTURE_DB` points at a SQLite catalog (or default temp path).
-- **Metaphysical reasoning (v2.1)**: `AXIOMURGY_REASONING=1` adds optional advisory `reasoning` to `--describe` and `--plan` JSON (default off). `AXIOMURGY_WYRD=1` with reasoning enabled surfaces `wyrd_hints` from `<artifact-dir>/wyrd/graph.sqlite` when present. Reasoning keys are allowlisted in review-bundle compare, not required for attestation.
+- **Metaphysical reasoning (v2.1)**: `AXIOMURGY_REASONING=1` adds optional advisory `reasoning` to `--describe` and `--plan` JSON (default off): `classification`, `governor`, `telos`, `scene`, `dialectic`, `habitus` (descriptive context). `AXIOMURGY_REASONING_EXPERIMENTAL=1` adds `reasoning.experimental` (correspondence, friction, combinatorics_search, wyrd_hints, generation_candidates). With experimental on, `AXIOMURGY_WYRD=1` fills `experimental.wyrd_hints` from `<artifact-dir>/wyrd/graph.sqlite` when present. Review-bundle compare allowlists only these subtrees, not stray `plan.reasoning.*` keys.
 
 ### Vermyth vs replay vs Ouroboros (routing)
 

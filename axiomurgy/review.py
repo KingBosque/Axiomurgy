@@ -9,6 +9,41 @@ from .legacy import ResolvedRunTarget
 from .describe import describe_target, environment_metadata, lint_target
 from .planning import build_plan_summary
 
+# Reasoning: allowlist only the minimal advisory surface + optional experimental subtree.
+# Do not use a single "plan.reasoning." prefix — that would allowlist stray sibling keys.
+_REASONING_SUB_PREFIXES_PLAN = (
+    "plan.reasoning.axiomurgy_reasoning_version",
+    "plan.reasoning.classification",
+    "plan.reasoning.governor",
+    "plan.reasoning.telos",
+    "plan.reasoning.scene",
+    "plan.reasoning.dialectic",
+    "plan.reasoning.habitus",
+    "plan.reasoning.experimental",
+)
+_REASONING_SUB_PREFIXES_DESCRIBE = (
+    "describe.reasoning.axiomurgy_reasoning_version",
+    "describe.reasoning.classification",
+    "describe.reasoning.governor",
+    "describe.reasoning.telos",
+    "describe.reasoning.scene",
+    "describe.reasoning.dialectic",
+    "describe.reasoning.habitus",
+    "describe.reasoning.experimental",
+)
+
+
+def _reasoning_path_allowlisted(path: str) -> bool:
+    if path in ("plan.reasoning", "describe.reasoning"):
+        return True
+    for prefix in _REASONING_SUB_PREFIXES_PLAN:
+        if path == prefix or path.startswith(prefix + "."):
+            return True
+    for prefix in _REASONING_SUB_PREFIXES_DESCRIBE:
+        if path == prefix or path.startswith(prefix + "."):
+            return True
+    return False
+
 
 def _attestation_allowlisted_path(path: str) -> bool:
     """Optional Vermyth/culture blocks must not break attestation when offline or drifting."""
@@ -22,10 +57,8 @@ def _attestation_allowlisted_path(path: str) -> bool:
         return True
     if path.startswith("describe.culture"):
         return True
-    # Metaphysical reasoning (v1): allowlisted only — not required for attestation.
-    if path == "plan.reasoning" or path.startswith("plan.reasoning."):
-        return True
-    if path == "describe.reasoning" or path.startswith("describe.reasoning."):
+    # Metaphysical reasoning (v2.1+): narrow allowlist — minimal surface + experimental subtree only.
+    if _reasoning_path_allowlisted(path):
         return True
     return False
 
